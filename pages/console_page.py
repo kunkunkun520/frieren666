@@ -1,8 +1,8 @@
 """
-控制台页面 - 三栏布局
-左侧：文件树 + 计划 + 任务输入
-中间：代码预览区
-右侧：对话区
+控制台页面 - 三栏布局（优化版）
+左侧：文件树 + 计划 + 任务输入（25%）
+中间：代码预览区（45%）
+右侧：对话区（30%）
 """
 
 from pathlib import Path
@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QTextEdit, QPushButton, QListWidget, QListWidgetItem,
     QSplitter, QTextBrowser, QProgressBar,
-    QGroupBox, QTreeWidget, QTreeWidgetItem, QStackedWidget
+    QGroupBox, QTreeWidget, QTreeWidgetItem, QStackedWidget, QLineEdit
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QTextCursor
@@ -43,17 +43,16 @@ class ConsolePage(QWidget):
             }
             QGroupBox {
                 background: rgba(37, 37, 38, 0.7);
-                backdrop-filter: blur(8px);
                 border: 1px solid rgba(255, 255, 255, 0.06);
-                border-radius: 16px;
-                margin-top: 8px;
-                padding-top: 16px;
+                border-radius: 12px;
+                margin-top: 6px;
+                padding-top: 12px;
                 font-weight: 500;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
-                left: 16px;
-                padding: 0 8px;
+                left: 12px;
+                padding: 0 6px;
                 color: #cccccc;
             }
             QTreeWidget, QListWidget, QTextEdit, QTextBrowser {
@@ -62,8 +61,8 @@ class ConsolePage(QWidget):
                 color: #cccccc;
             }
             QTreeWidget::item, QListWidget::item {
-                padding: 4px 0;
-                border-radius: 6px;
+                padding: 3px 0;
+                border-radius: 4px;
             }
             QTreeWidget::item:hover, QListWidget::item:hover {
                 background: rgba(255, 255, 255, 0.05);
@@ -74,19 +73,18 @@ class ConsolePage(QWidget):
             QPushButton {
                 background: rgba(61, 61, 61, 0.5);
                 border: 1px solid rgba(74, 74, 74, 0.5);
-                border-radius: 20px;
-                padding: 8px 16px;
+                border-radius: 16px;
+                padding: 6px 12px;
                 color: #cccccc;
             }
             QPushButton:hover {
                 background: rgba(74, 74, 74, 0.7);
-                border-color: rgba(106, 106, 106, 0.7);
             }
             QTextEdit {
                 background: rgba(30, 30, 30, 0.5);
                 border: 1px solid rgba(255, 255, 255, 0.08);
-                border-radius: 12px;
-                padding: 12px;
+                border-radius: 10px;
+                padding: 10px;
             }
             QTextEdit:focus {
                 border-color: #13a10e;
@@ -94,34 +92,34 @@ class ConsolePage(QWidget):
             QProgressBar {
                 border: none;
                 background: rgba(255, 255, 255, 0.05);
-                border-radius: 10px;
-                height: 4px;
+                border-radius: 8px;
+                height: 3px;
             }
             QProgressBar::chunk {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                                             stop:0 #13a10e, stop:1 #16c60c);
-                border-radius: 10px;
+                border-radius: 8px;
             }
             QScrollBar:vertical {
                 background: transparent;
-                width: 6px;
-                border-radius: 3px;
+                width: 5px;
+                border-radius: 2px;
             }
             QScrollBar::handle:vertical {
                 background: rgba(255, 255, 255, 0.15);
-                border-radius: 3px;
-                min-height: 30px;
+                border-radius: 2px;
+                min-height: 20px;
             }
             QScrollBar::handle:vertical:hover {
-                background: rgba(255, 255, 255, 0.3);
+                background: rgba(255, 255, 255, 0.25);
             }
         """)
 
     def setup_ui(self):
         """设置UI - 三栏布局"""
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
 
         # 主分割器
         main_splitter = QSplitter(Qt.Horizontal)
@@ -129,7 +127,7 @@ class ConsolePage(QWidget):
         main_splitter.setStyleSheet("""
             QSplitter::handle {
                 background: rgba(255, 255, 255, 0.05);
-                margin: 8px 0;
+                margin: 4px 0;
             }
         """)
 
@@ -145,30 +143,34 @@ class ConsolePage(QWidget):
         right_panel = self._create_chat_panel()
         main_splitter.addWidget(right_panel)
 
-        main_splitter.setSizes([300, 700, 400])
+        # 设置比例 25 : 45 : 30
+        total_width = 1000
+        main_splitter.setSizes([250, 450, 300])
         layout.addWidget(main_splitter)
 
         # 进度条
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
+        self.progress_bar.setMaximumHeight(3)
         layout.addWidget(self.progress_bar)
 
     def _create_left_panel(self):
         """创建左侧面板（文件树 + 计划 + 任务输入）"""
         panel = QWidget()
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(8)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(6)
 
-        # 文件树
+        # 文件树 - 占更多空间
         file_group = QGroupBox("📁 文件结构")
         file_layout = QVBoxLayout(file_group)
-        file_layout.setSpacing(8)
+        file_layout.setSpacing(4)
 
         refresh_layout = QHBoxLayout()
-        self.workspace_label = QLabel("工作区: 未选择")
-        self.workspace_label.setStyleSheet("color: #a0a0a0; font-size: 11px;")
-        self.refresh_tree_btn = QPushButton("🔄 刷新")
+        self.workspace_label = QLabel("未选择")
+        self.workspace_label.setStyleSheet("color: #888; font-size: 11px;")
+        self.refresh_tree_btn = QPushButton("🔄")
+        self.refresh_tree_btn.setFixedSize(28, 28)
         self.refresh_tree_btn.clicked.connect(self.refresh_file_tree)
         refresh_layout.addWidget(self.workspace_label)
         refresh_layout.addStretch()
@@ -180,34 +182,33 @@ class ConsolePage(QWidget):
         self.file_tree.itemDoubleClicked.connect(self.on_file_double_clicked)
         file_layout.addWidget(self.file_tree)
 
-        layout.addWidget(file_group, stretch=3)
+        layout.addWidget(file_group, stretch=4)
 
-        # 当前计划
-        plan_group = QGroupBox("📋 当前计划")
+        # 当前计划 - 中等空间
+        plan_group = QGroupBox("📋 计划")
         plan_layout = QVBoxLayout(plan_group)
-        plan_layout.setSpacing(8)
+        plan_layout.setSpacing(4)
 
         self.step_list = QListWidget()
         plan_layout.addWidget(self.step_list)
 
         layout.addWidget(plan_group, stretch=2)
 
-        # 任务输入
-        task_group = QGroupBox("📝 任务描述")
+        # 任务输入 - 固定高度
+        task_group = QGroupBox("📝 任务")
         task_layout = QVBoxLayout(task_group)
-        task_layout.setSpacing(8)
+        task_layout.setSpacing(6)
 
         self.task_input = QTextEdit()
-        self.task_input.setPlaceholderText("描述你想要创建的项目或功能...")
-        self.task_input.setMinimumHeight(80)
-        self.task_input.setMaximumHeight(120)
+        self.task_input.setPlaceholderText("描述你想要创建的项目...")
+        self.task_input.setFixedHeight(70)
         task_layout.addWidget(self.task_input)
 
-        # 按钮组
+        # 按钮组 - 紧凑排列
         btn_layout = QHBoxLayout()
-        btn_layout.setSpacing(8)
+        btn_layout.setSpacing(4)
 
-        self.execute_btn = QPushButton("▶ 开始执行")
+        self.execute_btn = QPushButton("▶ 执行")
         self.execute_btn.setObjectName("ExecuteButton")
         self.execute_btn.setCursor(Qt.PointingHandCursor)
         self.execute_btn.clicked.connect(self.on_execute_clicked)
@@ -216,15 +217,14 @@ class ConsolePage(QWidget):
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                                             stop:0 #13a10e, stop:1 #16c60c);
                 border: none;
-                border-radius: 24px;
-                padding: 10px 20px;
+                border-radius: 16px;
+                padding: 6px 12px;
                 color: white;
                 font-weight: bold;
             }
             #ExecuteButton:hover {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                                             stop:0 #16c60c, stop:1 #1ae610);
-                box-shadow: 0 0 15px rgba(19, 161, 14, 0.3);
             }
             #ExecuteButton:disabled {
                 background: #4a4a4a;
@@ -232,22 +232,26 @@ class ConsolePage(QWidget):
             }
         """)
 
-        self.pause_btn = QPushButton("⏸ 暂停")
+        self.pause_btn = QPushButton("⏸")
         self.pause_btn.setEnabled(False)
+        self.pause_btn.setFixedWidth(36)
         self.pause_btn.setCursor(Qt.PointingHandCursor)
         self.pause_btn.clicked.connect(self.on_pause_clicked)
 
-        self.resume_btn = QPushButton("▶ 恢复")
+        self.resume_btn = QPushButton("▶")
         self.resume_btn.setEnabled(False)
+        self.resume_btn.setFixedWidth(36)
         self.resume_btn.setCursor(Qt.PointingHandCursor)
         self.resume_btn.clicked.connect(self.on_resume_clicked)
 
-        self.cancel_btn = QPushButton("✖ 取消")
+        self.cancel_btn = QPushButton("✖")
         self.cancel_btn.setEnabled(False)
+        self.cancel_btn.setFixedWidth(36)
         self.cancel_btn.setCursor(Qt.PointingHandCursor)
         self.cancel_btn.clicked.connect(self.on_cancel_clicked)
 
-        self.clear_btn = QPushButton("⬚ 清空")
+        self.clear_btn = QPushButton("⬚")
+        self.clear_btn.setFixedWidth(36)
         self.clear_btn.setCursor(Qt.PointingHandCursor)
         self.clear_btn.clicked.connect(self.on_clear_clicked)
 
@@ -258,7 +262,7 @@ class ConsolePage(QWidget):
         btn_layout.addWidget(self.clear_btn)
 
         task_layout.addLayout(btn_layout)
-        layout.addWidget(task_group, stretch=1)
+        layout.addWidget(task_group, stretch=0)
 
         return panel
 
@@ -266,25 +270,25 @@ class ConsolePage(QWidget):
         """创建中间代码展示区"""
         panel = QWidget()
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(8)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(4)
 
         # 文件标签栏
         tab_bar = QWidget()
-        tab_bar.setFixedHeight(40)
+        tab_bar.setFixedHeight(32)
         tab_bar.setStyleSheet("""
             QWidget {
                 background: rgba(37, 37, 38, 0.8);
-                border-radius: 12px;
+                border-radius: 8px;
             }
         """)
 
         tab_layout = QHBoxLayout(tab_bar)
-        tab_layout.setContentsMargins(12, 0, 12, 0)
+        tab_layout.setContentsMargins(8, 0, 8, 0)
         tab_layout.setSpacing(0)
 
         self.current_file_label = QLabel("未打开文件")
-        self.current_file_label.setStyleSheet("color: #cccccc; padding: 0 12px;")
+        self.current_file_label.setStyleSheet("color: #cccccc; padding: 0 8px; font-size: 12px;")
         tab_layout.addWidget(self.current_file_label)
         tab_layout.addStretch()
 
@@ -310,21 +314,21 @@ class ConsolePage(QWidget):
         self.code_display = QTextEdit()
         self.code_display.setReadOnly(True)
         self.code_display.setPlaceholderText("双击左侧文件树中的文件查看代码...")
-        self.code_display.setFont(QFont("Consolas", 11))
+        self.code_display.setFont(QFont("Consolas", 10))
         self.code_stack.addWidget(self.code_display)
 
         # Diff显示区
         self.diff_display = QTextEdit()
         self.diff_display.setReadOnly(True)
         self.diff_display.setPlaceholderText("代码差异将在这里显示...")
-        self.diff_display.setFont(QFont("Consolas", 11))
+        self.diff_display.setFont(QFont("Consolas", 10))
         self.code_stack.addWidget(self.diff_display)
 
         # 测试结果显示区
         self.test_display = QTextEdit()
         self.test_display.setReadOnly(True)
         self.test_display.setPlaceholderText("测试结果将在这里显示...")
-        self.test_display.setFont(QFont("Consolas", 11))
+        self.test_display.setFont(QFont("Consolas", 10))
         self.code_stack.addWidget(self.test_display)
 
         layout.addWidget(self.code_stack)
@@ -332,61 +336,77 @@ class ConsolePage(QWidget):
         return panel
 
     def _create_chat_panel(self):
-        """创建右侧对话区"""
+        """创建右侧对话区 - 7:3 比例"""
         panel = QWidget()
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(8)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(4)
 
-        chat_group = QGroupBox("💬 对话区")
+        chat_group = QGroupBox("💬 对话")
         chat_layout = QVBoxLayout(chat_group)
-        chat_layout.setSpacing(8)
+        chat_layout.setSpacing(4)
 
-        # 对话历史
+        # 对话历史 - 占 7 份
         self.log_browser = QTextBrowser()
         self.log_browser.setOpenExternalLinks(True)
-        chat_layout.addWidget(self.log_browser)
+        self.log_browser.setStyleSheet("""
+            QTextBrowser {
+                background: transparent;
+                border: none;
+                color: #cccccc;
+                font-size: 13px;
+            }
+        """)
+        chat_layout.addWidget(self.log_browser, stretch=7)
 
         # 选项按钮区域
         self.options_widget = QWidget()
         self.options_layout = QHBoxLayout(self.options_widget)
-        self.options_layout.setContentsMargins(0, 4, 0, 4)
+        self.options_layout.setContentsMargins(0, 2, 0, 2)
         self.options_widget.setVisible(False)
         chat_layout.addWidget(self.options_widget)
 
-        # 输入框
+        # 输入框区域 - 占 3 份
         input_widget = QWidget()
         input_layout = QHBoxLayout(input_widget)
         input_layout.setContentsMargins(0, 0, 0, 0)
-        input_layout.setSpacing(8)
+        input_layout.setSpacing(6)
 
-        self.message_input = QTextEdit()
-        self.message_input.setPlaceholderText("输入消息... (输入「恢复执行」继续任务)")
-        self.message_input.setMaximumHeight(80)
-        self.message_input.setAcceptRichText(False)
+        self.message_input = QLineEdit()
+        self.message_input.setPlaceholderText("输入消息...")
+        self.message_input.setStyleSheet("""
+            QLineEdit {
+                background: rgba(45, 45, 45, 0.6);
+                border: none;
+                border-radius: 20px;
+                padding: 0 16px;
+                color: #e0e0e0;
+                font-size: 13px;
+                min-height: 36px;
+                max-height: 36px;
+            }
+        """)
 
         self.send_btn = QPushButton("发送")
+        self.send_btn.setFixedSize(60, 36)
         self.send_btn.setCursor(Qt.PointingHandCursor)
         self.send_btn.clicked.connect(self.send_user_message)
         self.send_btn.setStyleSheet("""
             QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                                            stop:0 #0e639c, stop:1 #1177bb);
+                background: #0e639c;
                 border: none;
-                border-radius: 20px;
-                padding: 8px 20px;
+                border-radius: 18px;
                 color: white;
                 font-weight: 500;
             }
             QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                                            stop:0 #1177bb, stop:1 #1688d6);
+                background: #1177bb;
             }
         """)
 
         input_layout.addWidget(self.message_input, stretch=1)
         input_layout.addWidget(self.send_btn)
-        chat_layout.addWidget(input_widget)
+        chat_layout.addWidget(input_widget, stretch=3)
 
         layout.addWidget(chat_group)
 
@@ -403,9 +423,9 @@ class ConsolePage(QWidget):
                 background: transparent;
                 border: none;
                 border-bottom: 2px solid transparent;
-                padding: 8px 16px;
+                padding: 4px 12px;
                 color: #a0a0a0;
-                font-size: 12px;
+                font-size: 11px;
             }
             QPushButton:hover {
                 color: #e0e0e0;
@@ -552,17 +572,18 @@ class ConsolePage(QWidget):
 
     def clear_log(self):
         self.log_browser.clear()
-
     def send_user_message(self):
+
         """发送用户消息"""
-        message = self.message_input.toPlainText().strip()
+        message = self.message_input.text().strip()  # QLineEdit 用 .text()
         if not message:
             return
         self.add_log(f"👤 用户: {message}", "user")
         self.message_input.clear()
 
         if self.waiting_for_response:
-            if hasattr(self, 'pending_context') and self.pending_context and self.pending_context.get("action") == "modify_plan":
+            if hasattr(self, 'pending_context') and self.pending_context and self.pending_context.get(
+                    "action") == "modify_plan":
                 self.waiting_for_response = False
                 if self.worker:
                     self.worker.on_modify_feedback(message)
@@ -576,7 +597,6 @@ class ConsolePage(QWidget):
                 self.worker.handle_chat_message(message)
             elif self.worker:
                 self.worker.on_user_response(message, {})
-
     # ========== 信号处理 ==========
 
     def on_status_change(self, status):
@@ -662,8 +682,8 @@ class ConsolePage(QWidget):
                 btn.setStyleSheet("""
                     QPushButton {
                         background: #3d3d3d;
-                        padding: 8px 16px;
-                        border-radius: 16px;
+                        padding: 6px 12px;
+                        border-radius: 12px;
                     }
                     QPushButton:hover {
                         background: #4d4d4d;

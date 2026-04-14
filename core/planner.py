@@ -120,13 +120,15 @@ src/
         return response
 
     def plan(self, user_task: str) -> List[Step]:
+        """生成任务计划（AGENTS.md 已经存在）"""
         plan_text = self._generate_plan(user_task)
         steps_data = parse_plan_to_steps(plan_text)
         steps = []
         for step_data in steps_data:
             step = Step(
                 id=step_data["id"],
-                description=f"{step_data['path']}: {step_data['description']}" if step_data['path'] else step_data['description'],
+                description=f"{step_data['path']}: {step_data['description']}" if step_data['path'] else step_data[
+                    'description'],
                 type=step_data["type"],
                 status=StepStatus.PENDING.value,
                 depends_on=step_data.get("depends_on", []),

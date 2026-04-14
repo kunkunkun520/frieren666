@@ -23,7 +23,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Archon - AI编程助手")
-        self.setMinimumSize(1400, 900)
+        self.setMinimumSize(1950, 1200)
         self.resize(1600, 1000)
         self.worker = None
 
@@ -38,7 +38,7 @@ class MainWindow(QMainWindow):
         # 设置中央widget
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-        central_widget.setStyleSheet("background-color: #1e1e1e;")
+        central_widget.setStyleSheet("background-color: #2a2a2a;")
 
         main_layout = QVBoxLayout(central_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
@@ -58,7 +58,16 @@ class MainWindow(QMainWindow):
         # 默认显示首页
         self.current_page = None
         self._show_page(self.home_page)
+        from utils.llm_client import LLMClient
+        from utils.config import Config
+        config = Config()
+        planner_config = config.get_planner_config()
+        self.llm_client = LLMClient(planner_config)
 
+        # 创建页面时传入 llm_client
+        self.home_page = HomePage(self.session_manager)
+        self.console_page = ConsolePage()
+        self.settings_page = SettingsPage()
         # 状态栏
         main_layout.addWidget(self._create_status_bar())
 
@@ -216,13 +225,20 @@ class MainWindow(QMainWindow):
         self.console_page.execute_signal.connect(self.on_execute_task)
 
         print("信号连接完成")
+    def on_new_session(self, session_name, user_task, agents_md):
 
-    def on_new_session(self, session_name, user_task):
         """创建新会话"""
         print(f"创建新会话: {session_name}")
         session = self.session_manager.create_session(session_name, user_task)
 
         workspace_path = Path(session.workspace_path)
+
+        # 保存 AGENTS.md
+        if agents_md:
+            agents_path = workspace_path / "AGENTS.md"
+            agents_path.write_text(agents_md, encoding="utf-8")
+            print(f"AGENTS.md 已保存")
+
         self.console_page.set_project_path(workspace_path)
         self.console_page.task_input.setPlainText(user_task)
         self.console_page.clear_log()
@@ -230,7 +246,6 @@ class MainWindow(QMainWindow):
 
         self.session_label.setText(f"📁 {session_name}")
 
-        # 创建 Worker
         self.worker = AgentWorker(
             user_task=user_task,
             workspace_path=workspace_path,
@@ -239,7 +254,6 @@ class MainWindow(QMainWindow):
         self.console_page.set_worker(self.worker)
         self.worker.start()
 
-        # 切换到控制台页面
         self._switch_page(self.console_page)
         self.status_label.setText(f"● 创建新会话: {session_name}")
 
