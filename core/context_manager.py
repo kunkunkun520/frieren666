@@ -5,11 +5,12 @@
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, asdict
 from enum import Enum
+
 
 class StepStatus(Enum):
     PENDING = "pending"
@@ -39,6 +40,8 @@ class Step:
     files_modified: List[str] = None
     depends_on: List[int] = None
     requires_approval: bool = False
+    design_notes: Optional[str] = None      # 新增：设计意图
+    exported_api: Optional[str] = None       # 新增：对外提供的接口摘要
 
     def __post_init__(self):
         if self.files_modified is None:
@@ -56,7 +59,9 @@ class Step:
             "error": self.error,
             "files_modified": self.files_modified,
             "depends_on": self.depends_on,
-            "requires_approval": self.requires_approval
+            "requires_approval": self.requires_approval,
+            "design_notes": self.design_notes,
+            "exported_api": self.exported_api
         }
 
     @classmethod
@@ -70,7 +75,9 @@ class Step:
             error=data.get("error"),
             files_modified=data.get("files_modified", []),
             depends_on=data.get("depends_on", []),
-            requires_approval=data.get("requires_approval", False)
+            requires_approval=data.get("requires_approval", False),
+            design_notes=data.get("design_notes"),
+            exported_api=data.get("exported_api")
         )
 
 
@@ -122,12 +129,21 @@ class Session:
 
 
 class ContextManager:
-    """上下文管理器 - 负责保存和加载会话"""
+    """上下文管理器 - 负责保存和加载会话，管理记忆系统"""
 
-    def __init__(self, workspace_path: Path):
+    def __init__(self, workspace_path: Path, llm_client=None):
         self.workspace_path = Path(workspace_path)
+        self.llm_client = llm_client  # 用于让模型写摘要、检索等
+
+        # 原有路径
         self.sessions_path = self.workspace_path / "sessions"
         self.sessions_path.mkdir(parents=True, exist_ok=True)
+
+        # 新增：记忆系统路径
+        self.memory_path = self.workspace_path / "MEMORY.md"
+        self.memory_dir = self.workspace_path / "memory"
+        self.memory_dir.mkdir(parents=True, exist_ok=True)
+        self.agents_path = self.workspace_path / "AGENTS.md"
 
         self.current_session: Optional[Session] = None
         self.current_steps: List[Step] = []
@@ -143,6 +159,8 @@ class ContextManager:
             from core.code_parser import CodeParser
             self._code_parser = CodeParser
         return self._code_parser
+
+    # ========== 原有方法保持不变 ==========
 
     def create_session(self, user_task: str, session_type: str = "code_generation") -> str:
         """创建新会话"""
@@ -197,6 +215,16 @@ class ContextManager:
         self.current_session.updated_at = datetime.now().isoformat()
         self._save_session()
 
+    def update_step(self, step: Step):
+        """更新单个步骤的完整信息（包括 design_notes）"""
+        for i, s in enumerate(self.current_steps):
+            if s.id == step.id:
+                self.current_steps[i] = step
+                break
+        self.current_session.plan = [s.to_dict() for s in self.current_steps]
+        self.current_session.updated_at = datetime.now().isoformat()
+        self._save_session()
+
     def add_git_commit(self, commit_msg: str):
         """添加 Git 提交记录"""
         self.current_session.git_commits.append(commit_msg)
@@ -223,6 +251,10 @@ class ContextManager:
             if step.id == step_id:
                 return step
         return None
+
+    def get_completed_steps(self) -> List[Step]:
+        """获取所有已完成的步骤"""
+        return [s for s in self.current_steps if s.status == StepStatus.SUCCESS.value]
 
     def get_session_summary(self) -> str:
         """获取会话摘要"""
@@ -266,7 +298,7 @@ class ContextManager:
         return sorted(sessions, key=lambda x: x["created_at"], reverse=True)
 
     def load_session(self, session_id: str) -> Optional[Session]:
-        """加载指定会话"""
+        """加载指定会话，并设置 current_steps"""
         file_path = self.sessions_path / f"{session_id}.json"
         if not file_path.exists():
             return None
@@ -276,6 +308,10 @@ class ContextManager:
 
         self.current_session = Session.from_dict(data)
         self.current_steps = [Step.from_dict(s) for s in self.current_session.plan]
+
+        # 同时加载索引
+        self.load_index()
+
         return self.current_session
 
     def _save_session(self):
@@ -293,7 +329,7 @@ class ContextManager:
         if file_path.exists():
             file_path.unlink()
 
-    # ========== 文件索引方法 ==========
+    # ========== 文件索引方法（保留，但降级为辅助） ==========
 
     def update_file_index(self, project_path: Path):
         """更新文件索引"""
@@ -339,3 +375,406 @@ class ContextManager:
                 self.file_index = {"files": {}, "exports": {}}
         else:
             self.file_index = {"files": {}, "exports": {}}
+
+    # ========== 新增：AGENTS.md 管理 ==========
+
+    def save_agents_md(self, content: str):
+        """保存 AGENTS.md"""
+        self.agents_path.write_text(content, encoding='utf-8')
+
+    def read_agents_md(self) -> str:
+        """读取 AGENTS.md"""
+        if self.agents_path.exists():
+            return self.agents_path.read_text(encoding='utf-8')
+        return ""
+
+    def append_to_agents(self, section: str, content: str):
+        """向 AGENTS.md 追加新章节"""
+        current = self.read_agents_md()
+        new_content = f"{current}\n\n## {section}\n{content}" if current else f"# 项目约定\n\n## {section}\n{content}"
+        self.save_agents_md(new_content)
+
+    # ========== 新增：MEMORY.md 管理 ==========
+
+    def read_memory_md(self) -> str:
+        """读取长期记忆"""
+        if self.memory_path.exists():
+            return self.memory_path.read_text(encoding='utf-8')
+        return ""
+
+    def update_memory(self, step: Step, summary: str):
+        """每完成一个 Step，更新长期记忆"""
+
+        if self.llm_client is None:
+            print("警告：LLM 客户端未设置，无法更新记忆")
+            return
+
+        current = self.read_memory_md()
+
+        if current:
+            prompt = f"""
+            当前长期记忆：
+            {current}
+            
+            新完成的任务：
+            - 步骤：{step.description}
+            - 文件：{step.files_modified}
+            - 摘要：{summary}
+            - 设计意图：{step.design_notes or '无'}
+            
+            请把新任务**合并**到长期记忆中，输出完整的 MEMORY.md。
+            
+            要求：
+            - 保留「项目进展」「关键决策」「踩过的坑」「待办」四个章节（如果没有就创建）
+            - 更新项目进展（标记已完成✅，添加新进展）
+            - 如有新的关键决策或坑，补充到对应章节
+            - 保持结构清晰，篇幅控制在 50 行以内
+            """
+        else:
+            prompt = f"""
+            项目第一个完成的任务：
+            - 步骤：{step.description}
+            - 文件：{step.files_modified}
+            - 摘要：{summary}
+            - 设计意图：{step.design_notes or '无'}
+            
+            请创建一个 MEMORY.md，包含：
+            ## 项目进展
+            ## 关键决策
+            ## 踩过的坑
+            ## 待办
+            
+            直接输出完整的 MEMORY.md 内容。
+            """
+
+        try:
+            new_memory = self.llm_client.chat([
+                {"role": "system", "content": "你是记忆压缩助手，将工作记录合并成长期记忆。"},
+                {"role": "user", "content": prompt}
+            ])
+            self.memory_path.write_text(new_memory, encoding='utf-8')
+        except Exception as e:
+            print(f"更新记忆失败: {e}")
+
+    # ========== 新增：近期工作（每日日志）管理 ==========
+
+    def write_daily_log(self, step: Step, summary: str, code_snippet: str = None):
+        """追加到今日日志"""
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        log_path = self.memory_dir / f"{today}.md"
+
+        timestamp = datetime.now().strftime("%H:%M")
+
+        entry = f"""
+## {timestamp} - {step.description}
+
+**文件**：{step.files_modified}
+**类型**：{step.type}
+**摘要**：{summary}
+"""
+        if step.design_notes:
+            entry += f"**设计意图**：{step.design_notes}\n"
+
+        if code_snippet:
+            ext = Path(step.files_modified[0]).suffix.lstrip('.') if step.files_modified else "python"
+            entry += f"\n**代码片段**：\n```{ext}\n{code_snippet}\n```\n"
+
+        entry += "\n---\n"
+
+        with open(log_path, 'a', encoding='utf-8') as f:
+            f.write(entry)
+
+    def read_recent_logs(self, days: int = 3) -> str:
+        """读取最近 N 天的日志"""
+
+        if not self.memory_dir.exists():
+            return ""
+
+        log_files = sorted(self.memory_dir.glob("*.md"), reverse=True)[:days]
+
+        content = []
+        for log in log_files:
+            content.append(f"## {log.stem}\n")
+            content.append(log.read_text(encoding='utf-8'))
+            content.append("\n")
+
+        return "\n".join(content) if content else "暂无近期工作记录"
+
+    # ========== 新增：项目结构展示 ==========
+
+    def get_project_structure(self, project_path: Path = None) -> str:
+        """生成项目目录树（带模型写的摘要）"""
+
+        if project_path is None:
+            project_path = self.workspace_path
+
+        if not project_path.exists():
+            return "暂无文件"
+
+        # 从 file_index 获取已有的摘要
+        file_summaries = {}
+        for file_path_str, info in self.file_index.get("files", {}).items():
+            if "summary" in info:
+                file_summaries[file_path_str] = info["summary"]
+
+        lines = ["## 当前项目结构\n"]
+        lines.append("```")
+
+        def walk(path: Path, indent: str = ""):
+            items = sorted(path.iterdir())
+            for item in items:
+                if item.name.startswith('.') or item.name == '__pycache__':
+                    continue
+
+                rel_path = str(item.relative_to(self.workspace_path))
+
+                if item.is_dir():
+                    lines.append(f"{indent}{item.name}/")
+                    walk(item, indent + "  ")
+                else:
+                    summary = file_summaries.get(rel_path, self._get_type_hint(item))
+                    lines.append(f"{indent}{item.name} {summary}")
+
+        walk(project_path)
+        lines.append("```")
+
+        return "\n".join(lines)
+
+    def _get_type_hint(self, file_path: Path) -> str:
+        """根据扩展名返回类型提示"""
+        ext = file_path.suffix.lower()
+        hints = {
+            '.py': '',
+            '.html': '→ [模板]',
+            '.css': '→ [样式]',
+            '.js': '→ [脚本]',
+            '.json': '→ [配置]',
+            '.md': '→ [文档]',
+            '.txt': '→ [文本]',
+        }
+        return hints.get(ext, '')
+
+    def add_file_summary(self, file_path: str, summary: str):
+        """添加或更新文件的摘要"""
+        if file_path not in self.file_index.get("files", {}):
+            self.file_index["files"][file_path] = {}
+        self.file_index["files"][file_path]["summary"] = summary
+        self._save_index()
+
+    # ========== 新增：相关模块检索 ==========
+
+    def get_relevant_context(self, current_step: Step) -> str:
+        """让模型判断需要哪些已完成步骤的上下文"""
+
+        if self.llm_client is None:
+            return ""
+
+        completed_steps = self.get_completed_steps()
+        if not completed_steps:
+            return ""
+
+        # 构建候选列表（粗筛：最多 10 个）
+        candidates = completed_steps[:10]
+
+        completed_summary = []
+        for s in candidates:
+            completed_summary.append(f"""
+### Step {s.id}: {s.description}
+**文件**：{s.files_modified}
+**提供**：{s.exported_api or s.design_notes or '无摘要'}
+""")
+
+        prompt = f"""
+        当前任务：{current_step.description}
+        
+        已完成的所有步骤：
+        {chr(10).join(completed_summary)}
+        
+        请判断：上述步骤中，**哪些和当前任务相关**？
+        只输出相关步骤的 ID，用逗号分隔，如：1,3,5
+        如果没有相关的，输出"无"。
+        """
+
+        try:
+            response = self.llm_client.chat([
+                {"role": "system", "content": "你是代码分析专家，判断任务相关性。"},
+                {"role": "user", "content": prompt}
+            ])
+
+            if response.strip() == "无":
+                return ""
+
+            relevant_ids = [int(x.strip()) for x in response.split(',') if x.strip().isdigit()]
+
+            relevant_context = []
+            for sid in relevant_ids:
+                s = self.get_step_by_id(sid)
+                if s:
+                    relevant_context.append(f"""
+### 相关模块：{s.description}
+**文件**：{s.files_modified}
+**设计意图**：{s.design_notes or '无'}
+**导出接口**：{s.exported_api or '无'}
+""")
+
+            if relevant_context:
+                return "## 相关模块上下文\n" + "\n".join(relevant_context)
+
+        except Exception as e:
+            print(f"检索相关模块失败: {e}")
+
+        return ""
+
+    # ========== 新增：统一上下文入口 ==========
+
+    def get_full_context_for_step(self, step: Step) -> str:
+        """为当前步骤组装完整上下文"""
+
+        parts = []
+
+        # 1. 项目约定
+        agents = self.read_agents_md()
+        if agents:
+            parts.append(f"## 项目约定\n{agents}")
+
+        # 2. 长期记忆
+        memory = self.read_memory_md()
+        if memory:
+            parts.append(f"## 长期记忆\n{memory}")
+
+        # 3. 近期工作
+        recent = self.read_recent_logs(days=3)
+        if recent and recent != "暂无近期工作记录":
+            parts.append(f"## 近期工作\n{recent}")
+
+        # 4. 相关模块上下文
+        relevant = self.get_relevant_context(step)
+        if relevant:
+            parts.append(relevant)
+
+        # 5. 项目结构
+        structure = self.get_project_structure(self.workspace_path)
+        parts.append(structure)
+
+        # 6. 当前任务
+        parts.append(f"## 当前任务\n请生成 {step.description}")
+
+        return "\n\n".join(parts)
+
+    def get_context_for_modify(self, user_request: str) -> str:
+        """为修改请求组装上下文（不包含当前任务）"""
+
+        parts = []
+
+        agents = self.read_agents_md()
+        if agents:
+            parts.append(f"## 项目约定\n{agents}")
+
+        memory = self.read_memory_md()
+        if memory:
+            parts.append(f"## 长期记忆\n{memory}")
+
+        recent = self.read_recent_logs(days=3)
+        if recent and recent != "暂无近期工作记录":
+            parts.append(f"## 近期工作\n{recent}")
+
+        structure = self.get_project_structure(self.workspace_path)
+        parts.append(structure)
+
+        parts.append(f"## 用户请求\n{user_request}")
+
+        return "\n\n".join(parts)
+
+    # ========== 新增：让模型写摘要 ==========
+
+    def generate_step_summary(self, step: Step, code: str) -> tuple:
+        """让模型为完成的步骤写摘要和设计意图"""
+
+        if self.llm_client is None:
+            return code[:200] + "...", None
+
+        # 写工作摘要
+        summary_prompt = f"""
+        你刚完成了任务：{step.description}
+        文件：{step.files_modified}
+        代码：
+        ```{step.files_modified[0].split('.')[-1] if step.files_modified else 'python'}
+        {code[:800]}...
+        请用 2-3 句话总结这个模块：
+
+        提供了什么
+
+        关键字段/方法
+
+        需要注意的点
+
+        直接输出摘要。
+        """
+
+        try:
+            summary = self.llm_client.chat([
+                {"role": "system", "content": "你是代码总结专家。"},
+                {"role": "user", "content": summary_prompt}
+            ])
+        except Exception as e:
+            summary = f"完成 {step.description}"
+
+        # 写设计意图
+        design_prompt = f"""
+        你刚完成了：{step.description}
+        代码：{code[:800]}...
+
+        请写一段设计意图，给后续依赖这个模块的开发者看。
+
+        包含：
+
+        这个模块提供了什么（核心 API）
+
+        使用时需要注意什么（约束、陷阱）
+
+        和其他模块的关系（如果有）
+
+        用 3-5 行，紧凑格式。
+        直接输出。
+        """
+
+        try:
+            design_notes = self.llm_client.chat([
+                {"role": "system", "content": "你是软件架构专家。"},
+                {"role": "user", "content": design_prompt}
+            ])
+        except Exception as e:
+            design_notes = None
+
+        return summary, design_notes
+
+    def generate_file_summary_for_index(self, file_path: str, code: str) -> str:
+        """为文件写一行摘要，用于项目结构展示"""
+
+        if self.llm_client is None:
+            return ""
+
+        prompt = f"""
+        文件：{file_path}
+        代码：{code[:500]}...
+
+        用一行话总结这个文件提供了什么（不超过 20 个字）。
+        格式：→ [摘要]
+
+        示例：
+        → User 模型 (id, username, email)
+        → login(), register() 认证函数
+        → 数据库连接和 Base 类
+        → 首页模板
+
+        直接输出，不要解释。
+        """
+
+        try:
+            return self.llm_client.chat([
+                {"role": "system", "content": "你是代码总结专家，只输出一行摘要。"},
+                {"role": "user", "content": prompt}
+            ])
+        except Exception as e:
+            return self._get_type_hint(Path(file_path))
