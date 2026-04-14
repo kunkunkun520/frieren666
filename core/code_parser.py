@@ -1,5 +1,6 @@
 """
 代码解析器 - 提取文件中的类、函数、方法信息
+（改造后：降级为辅助工具，主要用于扫描目录结构）
 """
 
 import ast
@@ -8,7 +9,7 @@ from pathlib import Path
 
 
 class CodeParser:
-    """解析Python代码，提取结构和导出信息"""
+    """解析Python代码，提取结构和导出信息（辅助用）"""
 
     @staticmethod
     def parse_file(file_path: Path) -> Dict[str, Any]:
@@ -52,14 +53,12 @@ class CodeParser:
                     result["classes"].append(class_info)
 
                 elif isinstance(node, ast.FunctionDef):
-                    parent = getattr(node, 'parent', None)
-                    if not parent or not isinstance(parent, ast.ClassDef):
-                        result["functions"].append({
-                            "name": node.name,
-                            "type": "function",
-                            "params": [arg.arg for arg in node.args.args],
-                            "docstring": ast.get_docstring(node)
-                        })
+                    result["functions"].append({
+                        "name": node.name,
+                        "type": "function",
+                        "params": [arg.arg for arg in node.args.args],
+                        "docstring": ast.get_docstring(node)
+                    })
 
                 elif isinstance(node, ast.Import):
                     for alias in node.names:
@@ -96,9 +95,9 @@ class CodeParser:
 
         src_path = project_path / "src"
         if not src_path.exists():
-            return index
+            src_path = project_path
 
-        for py_file in src_path.glob("*.py"):
+        for py_file in src_path.rglob("*.py"):
             if py_file.name.startswith("__"):
                 continue
 
@@ -106,14 +105,15 @@ class CodeParser:
                 file_info = CodeParser.parse_file(py_file)
                 module_name = file_info.get("module_name", py_file.stem)
                 file_info["module_name"] = module_name
-                index["files"][str(py_file)] = file_info
+                rel_path = str(py_file.relative_to(project_path))
+                index["files"][rel_path] = file_info
 
                 for cls in file_info.get("classes", []):
                     index["exports"].append({
                         "name": cls["name"],
                         "type": "class",
                         "module": module_name,
-                        "file": str(py_file),
+                        "file": rel_path,
                         "methods": cls.get("methods", [])
                     })
 
@@ -122,7 +122,7 @@ class CodeParser:
                         "name": func["name"],
                         "type": "function",
                         "module": module_name,
-                        "file": str(py_file)
+                        "file": rel_path
                     })
 
             except Exception as e:
@@ -133,7 +133,6 @@ class CodeParser:
 
     @staticmethod
     def format_index_for_prompt(index: Dict[str, Any]) -> str:
-        """格式化索引供LLM使用，明确区分类和类中的方法"""
         if not index.get("exports"):
             return "暂无已有代码文件。"
 
@@ -151,7 +150,7 @@ class CodeParser:
             by_module[module].append(exp)
 
         for module_name, exports in by_module.items():
-            lines.append(f"### 文件: src/{module_name}.py")
+            lines.append(f"### 文件: {exports[0]['file']}")
             lines.append(f"模块名: {module_name}")
             lines.append("导出内容：")
 
@@ -162,14 +161,26 @@ class CodeParser:
                         method_names = [m["name"] for m in methods]
                         lines.append(f"  📦 类: {exp['name']}")
                         lines.append(f"      方法: {', '.join(method_names)}")
-                        lines.append(f"      导入方式: from src.{module_name} import {exp['name']}")
+                        lines.append(f"      导入方式: from {module_name} import {exp['name']}")
                         lines.append(f"      使用方式: instance = {exp['name']}(); instance.method_name()")
                     else:
                         lines.append(f"  📦 类: {exp['name']}")
-                        lines.append(f"      导入方式: from src.{module_name} import {exp['name']}")
+                        lines.append(f"      导入方式: from {module_name} import {exp['name']}")
                 else:
                     lines.append(f"  🔧 函数: {exp['name']}")
-                    lines.append(f"      导入方式: from src.{module_name} import {exp['name']}")
+                    lines.append(f"      导入方式: from {module_name} import {exp['name']}")
             lines.append("")
         return "\n".join(lines)
 
+    @staticmethod
+    def scan_directory(project_path: Path) -> List[str]:
+        files = []
+        if not project_path.exists():
+            return files
+
+        for item in project_path.rglob("*"):
+            if item.is_file() and not item.name.startswith('.') and item.name != '__pycache__':
+                rel_path = str(item.relative_to(project_path))
+                files.append(rel_path)
+
+        return sorted(files)
