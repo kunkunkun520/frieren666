@@ -23,14 +23,21 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Archon - AI编程助手")
-        self.setMinimumSize(1950, 1200)
+        self.setMinimumSize(2100, 1600)
         self.resize(1600, 1000)
         self.worker = None
 
         # 初始化会话管理器
         self.session_manager = SessionManager()
 
-        # 先创建页面
+        # 初始化 LLM 客户端
+        from utils.llm_client import LLMClient
+        from utils.config import Config
+        config = Config()
+        planner_config = config.get_planner_config()
+        self.llm_client = LLMClient(planner_config)
+
+        # ========== 只创建一次页面 ==========
         self.home_page = HomePage(self.session_manager)
         self.console_page = ConsolePage()
         self.settings_page = SettingsPage()
@@ -38,13 +45,13 @@ class MainWindow(QMainWindow):
         # 设置中央widget
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-        central_widget.setStyleSheet("background-color: #2a2a2a;")
+        central_widget.setStyleSheet("background-color: #1e1e1e;")
 
         main_layout = QVBoxLayout(central_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # 顶部导航栏（现在可以安全引用 self.home_page 了）
+        # 顶部导航栏
         main_layout.addWidget(self._create_top_nav())
 
         # 页面容器
@@ -58,16 +65,7 @@ class MainWindow(QMainWindow):
         # 默认显示首页
         self.current_page = None
         self._show_page(self.home_page)
-        from utils.llm_client import LLMClient
-        from utils.config import Config
-        config = Config()
-        planner_config = config.get_planner_config()
-        self.llm_client = LLMClient(planner_config)
 
-        # 创建页面时传入 llm_client
-        self.home_page = HomePage(self.session_manager)
-        self.console_page = ConsolePage()
-        self.settings_page = SettingsPage()
         # 状态栏
         main_layout.addWidget(self._create_status_bar())
 
@@ -215,7 +213,6 @@ class MainWindow(QMainWindow):
             btn.setChecked(btn_page == page)
 
     def _connect_signals(self):
-        """连接信号"""
         # HomePage 信号
         self.home_page.new_session_signal.connect(self.on_new_session)
         self.home_page.load_session_signal.connect(self.on_load_session)
@@ -227,7 +224,6 @@ class MainWindow(QMainWindow):
         print("信号连接完成")
     def on_new_session(self, session_name, user_task, agents_md):
 
-        """创建新会话"""
         print(f"创建新会话: {session_name}")
         session = self.session_manager.create_session(session_name, user_task)
 

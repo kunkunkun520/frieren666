@@ -10,7 +10,8 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QTextEdit, QPushButton, QListWidget, QListWidgetItem,
     QSplitter, QTextBrowser, QProgressBar,
-    QGroupBox, QTreeWidget, QTreeWidgetItem, QStackedWidget, QLineEdit
+    QGroupBox, QTreeWidget, QTreeWidgetItem, QStackedWidget,
+    QMessageBox, QLineEdit
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QTextCursor
@@ -30,6 +31,12 @@ class ConsolePage(QWidget):
         self.pending_context = None
         self.pending_options = []
         self.project_path = None
+
+        # 编辑相关状态
+        self.current_editing_file = None
+        self.original_content = None
+        self.edit_mode = False
+
         self.setup_ui()
         self.setup_style()
 
@@ -121,7 +128,20 @@ class ConsolePage(QWidget):
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(6)
 
-        # 主分割器
+        # 状态指示器
+        self.status_label = QLabel("● 就绪")
+        self.status_label.setStyleSheet("""
+            QLabel {
+                color: #6a9955;
+                font-size: 12px;
+                padding: 2px 8px;
+                background: rgba(37, 37, 38, 0.8);
+                border-radius: 4px;
+            }
+        """)
+        layout.addWidget(self.status_label)
+
+        # 主分割器（只创建一次）
         main_splitter = QSplitter(Qt.Horizontal)
         main_splitter.setHandleWidth(1)
         main_splitter.setStyleSheet("""
@@ -131,29 +151,22 @@ class ConsolePage(QWidget):
             }
         """)
 
-        # ===== 左侧面板（文件树 + 计划 + 任务输入）=====
         left_panel = self._create_left_panel()
         main_splitter.addWidget(left_panel)
 
-        # ===== 中间代码区 =====
         center_panel = self._create_code_panel()
         main_splitter.addWidget(center_panel)
 
-        # ===== 右侧对话区 =====
         right_panel = self._create_chat_panel()
         main_splitter.addWidget(right_panel)
 
-        # 设置比例 25 : 45 : 30
-        total_width = 1000
         main_splitter.setSizes([250, 450, 300])
-        layout.addWidget(main_splitter)
+        layout.addWidget(main_splitter, stretch=1)
 
-        # 进度条
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
         self.progress_bar.setMaximumHeight(3)
         layout.addWidget(self.progress_bar)
-
     def _create_left_panel(self):
         """创建左侧面板（文件树 + 计划 + 任务输入）"""
         panel = QWidget()
@@ -161,7 +174,6 @@ class ConsolePage(QWidget):
         layout.setContentsMargins(2, 2, 2, 2)
         layout.setSpacing(6)
 
-        # 文件树 - 占更多空间
         file_group = QGroupBox("📁 文件结构")
         file_layout = QVBoxLayout(file_group)
         file_layout.setSpacing(4)
@@ -184,7 +196,6 @@ class ConsolePage(QWidget):
 
         layout.addWidget(file_group, stretch=4)
 
-        # 当前计划 - 中等空间
         plan_group = QGroupBox("📋 计划")
         plan_layout = QVBoxLayout(plan_group)
         plan_layout.setSpacing(4)
@@ -194,7 +205,6 @@ class ConsolePage(QWidget):
 
         layout.addWidget(plan_group, stretch=2)
 
-        # 任务输入 - 固定高度
         task_group = QGroupBox("📝 任务")
         task_layout = QVBoxLayout(task_group)
         task_layout.setSpacing(6)
@@ -204,7 +214,6 @@ class ConsolePage(QWidget):
         self.task_input.setFixedHeight(70)
         task_layout.addWidget(self.task_input)
 
-        # 按钮组 - 紧凑排列
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(4)
 
@@ -273,9 +282,8 @@ class ConsolePage(QWidget):
         layout.setContentsMargins(2, 2, 2, 2)
         layout.setSpacing(4)
 
-        # 文件标签栏
         tab_bar = QWidget()
-        tab_bar.setFixedHeight(32)
+        tab_bar.setFixedHeight(36)
         tab_bar.setStyleSheet("""
             QWidget {
                 background: rgba(37, 37, 38, 0.8);
@@ -292,7 +300,44 @@ class ConsolePage(QWidget):
         tab_layout.addWidget(self.current_file_label)
         tab_layout.addStretch()
 
-        # 标签切换按钮
+        # 编辑模式切换按钮
+        self.edit_mode_btn = QPushButton("✏️ 编辑")
+        self.edit_mode_btn.setCheckable(True)
+        self.edit_mode_btn.setCursor(Qt.PointingHandCursor)
+        self.edit_mode_btn.clicked.connect(self.toggle_edit_mode)
+        self.edit_mode_btn.setStyleSheet("""
+            QPushButton {
+                background: transparent;
+                border: none;
+                color: #a0a0a0;
+                padding: 4px 12px;
+                font-size: 12px;
+            }
+            QPushButton:hover { color: #ffffff; }
+            QPushButton:checked { color: #13a10e; }
+        """)
+        tab_layout.addWidget(self.edit_mode_btn)
+
+        # 提交修改按钮
+        self.submit_btn = QPushButton("📤 提交")
+        self.submit_btn.setCursor(Qt.PointingHandCursor)
+        self.submit_btn.setEnabled(False)
+        self.submit_btn.setVisible(False)
+        self.submit_btn.clicked.connect(self.submit_manual_changes)
+        self.submit_btn.setStyleSheet("""
+            QPushButton {
+                background: #13a10e;
+                border: none;
+                border-radius: 12px;
+                padding: 4px 12px;
+                color: white;
+                font-size: 12px;
+            }
+            QPushButton:hover { background: #16c60c; }
+            QPushButton:disabled { background: #4a4a4a; }
+        """)
+        tab_layout.addWidget(self.submit_btn)
+
         self.code_tab_btn = self._create_tab_button("代码", True)
         self.diff_tab_btn = self._create_tab_button("Diff", False)
         self.test_tab_btn = self._create_tab_button("测试", False)
@@ -307,24 +352,21 @@ class ConsolePage(QWidget):
 
         layout.addWidget(tab_bar)
 
-        # 代码显示栈
         self.code_stack = QStackedWidget()
 
-        # 代码显示区
         self.code_display = QTextEdit()
         self.code_display.setReadOnly(True)
         self.code_display.setPlaceholderText("双击左侧文件树中的文件查看代码...")
         self.code_display.setFont(QFont("Consolas", 10))
+        self.code_display.textChanged.connect(self.on_content_changed)
         self.code_stack.addWidget(self.code_display)
 
-        # Diff显示区
         self.diff_display = QTextEdit()
         self.diff_display.setReadOnly(True)
         self.diff_display.setPlaceholderText("代码差异将在这里显示...")
         self.diff_display.setFont(QFont("Consolas", 10))
         self.code_stack.addWidget(self.diff_display)
 
-        # 测试结果显示区
         self.test_display = QTextEdit()
         self.test_display.setReadOnly(True)
         self.test_display.setPlaceholderText("测试结果将在这里显示...")
@@ -336,7 +378,7 @@ class ConsolePage(QWidget):
         return panel
 
     def _create_chat_panel(self):
-        """创建右侧对话区 - 7:3 比例"""
+        """创建右侧对话区"""
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(2, 2, 2, 2)
@@ -346,27 +388,16 @@ class ConsolePage(QWidget):
         chat_layout = QVBoxLayout(chat_group)
         chat_layout.setSpacing(4)
 
-        # 对话历史 - 占 7 份
         self.log_browser = QTextBrowser()
         self.log_browser.setOpenExternalLinks(True)
-        self.log_browser.setStyleSheet("""
-            QTextBrowser {
-                background: transparent;
-                border: none;
-                color: #cccccc;
-                font-size: 13px;
-            }
-        """)
         chat_layout.addWidget(self.log_browser, stretch=7)
 
-        # 选项按钮区域
         self.options_widget = QWidget()
         self.options_layout = QHBoxLayout(self.options_widget)
         self.options_layout.setContentsMargins(0, 2, 0, 2)
         self.options_widget.setVisible(False)
         chat_layout.addWidget(self.options_widget)
 
-        # 输入框区域 - 占 3 份
         input_widget = QWidget()
         input_layout = QHBoxLayout(input_widget)
         input_layout.setContentsMargins(0, 0, 0, 0)
@@ -386,6 +417,7 @@ class ConsolePage(QWidget):
                 max-height: 36px;
             }
         """)
+        self.message_input.returnPressed.connect(self.send_user_message)
 
         self.send_btn = QPushButton("发送")
         self.send_btn.setFixedSize(60, 36)
@@ -413,7 +445,6 @@ class ConsolePage(QWidget):
         return panel
 
     def _create_tab_button(self, text, checked=False):
-        """创建标签切换按钮"""
         btn = QPushButton(text)
         btn.setCheckable(True)
         btn.setChecked(checked)
@@ -427,9 +458,7 @@ class ConsolePage(QWidget):
                 color: #a0a0a0;
                 font-size: 11px;
             }
-            QPushButton:hover {
-                color: #e0e0e0;
-            }
+            QPushButton:hover { color: #e0e0e0; }
             QPushButton:checked {
                 color: #13a10e;
                 border-bottom-color: #13a10e;
@@ -437,10 +466,115 @@ class ConsolePage(QWidget):
         """)
         return btn
 
-    # ========== 公共方法 ==========
+    # ========== 编辑相关方法 ==========
+
+    def toggle_edit_mode(self):
+        """切换编辑模式"""
+        self.edit_mode = self.edit_mode_btn.isChecked()
+
+        if self.edit_mode:
+            if self.current_editing_file:
+                self.code_display.setReadOnly(False)
+                self.code_display.setStyleSheet("""
+                    QTextEdit {
+                        background: #1e1e1e;
+                        border: 2px solid #13a10e;
+                        border-radius: 8px;
+                        color: #d4d4d4;
+                        padding: 16px;
+                    }
+                """)
+                self.submit_btn.setVisible(True)
+                self.add_log("✏️ 编辑模式已开启，修改后点击「提交」", "info")
+            else:
+                self.edit_mode_btn.setChecked(False)
+                self.add_log("请先双击打开一个文件", "warning")
+        else:
+            self.code_display.setReadOnly(True)
+            self.code_display.setStyleSheet("""
+                QTextEdit {
+                    background: #1e1e1e;
+                    border: none;
+                    color: #d4d4d4;
+                    padding: 16px;
+                }
+            """)
+            self.submit_btn.setVisible(False)
+            self.submit_btn.setEnabled(False)
+
+    def on_content_changed(self):
+        """内容变化时启用提交按钮"""
+        if self.edit_mode and self.current_editing_file:
+            current_content = self.code_display.toPlainText()
+            if current_content != self.original_content:
+                self.submit_btn.setEnabled(True)
+            else:
+                self.submit_btn.setEnabled(False)
+
+    def submit_manual_changes(self):
+        """提交手动修改"""
+        if not self.current_editing_file:
+            return
+
+        new_content = self.code_display.toPlainText()
+        file_path = self.current_editing_file["full_path"]
+        rel_path = self.current_editing_file["rel_path"]
+
+        # 语法检查
+        syntax_ok, syntax_error = self._check_syntax_manual(new_content, rel_path)
+        if not syntax_ok:
+            self.add_log(f"❌ 语法错误: {syntax_error}", "error")
+            QMessageBox.warning(self, "语法错误", f"代码存在语法错误，请修改后重试：\n\n{syntax_error}")
+            return
+
+        self.add_log(f"✅ 语法检查通过", "success")
+        self.show_diff(rel_path, self.original_content, new_content)
+
+        reply = QMessageBox.question(
+            self, "提交修改",
+            f"即将保存对 {rel_path} 的修改。\n\n是否让 AI 分析这个修改对其他文件的影响，并自动更新相关文件？",
+            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
+        )
+
+        if reply == QMessageBox.Cancel:
+            return
+
+        try:
+            Path(file_path).write_text(new_content, encoding="utf-8")
+            self.original_content = new_content
+            self.submit_btn.setEnabled(False)
+            self.add_log(f"💾 已保存: {rel_path}", "success")
+            self.refresh_file_tree()
+        except Exception as e:
+            self.add_log(f"❌ 保存失败: {e}", "error")
+            return
+
+        if reply == QMessageBox.Yes:
+            self.add_log("🔍 正在分析对其他文件的影响...", "info")
+            if self.worker:
+                self.worker.analyze_impact_and_update(
+                    file_path=rel_path,
+                    old_content=self.original_content,
+                    new_content=new_content
+                )
+
+    def _check_syntax_manual(self, code: str, file_path: str) -> tuple:
+        """手动修改的语法检查"""
+        if not code:
+            return False, "代码为空"
+
+        if file_path.endswith('.py'):
+            try:
+                compile(code, file_path, 'exec')
+                return True, None
+            except SyntaxError as e:
+                return False, f"第 {e.lineno} 行: {e.msg}"
+
+        return True, None
+
+    # ========== 文件树相关 ==========
 
     def set_project_path(self, path):
-        """设置项目路径"""
         if isinstance(path, str):
             self.project_path = Path(path)
         else:
@@ -449,7 +583,6 @@ class ConsolePage(QWidget):
         self.refresh_file_tree()
 
     def refresh_file_tree(self):
-        """刷新文件树"""
         self.file_tree.clear()
         if not self.project_path or not self.project_path.exists():
             return
@@ -459,7 +592,6 @@ class ConsolePage(QWidget):
         root_item.setExpanded(True)
 
     def _add_directory_items(self, parent_item, path: Path):
-        """递归添加目录项"""
         try:
             for item in sorted(path.iterdir()):
                 if item.name.startswith('.') or item.name == '__pycache__':
@@ -475,7 +607,6 @@ class ConsolePage(QWidget):
             pass
 
     def on_file_double_clicked(self, item, column):
-        """双击文件预览"""
         path_parts = []
         current = item
         while current:
@@ -493,11 +624,26 @@ class ConsolePage(QWidget):
                 content = file_path.read_text(encoding="utf-8")
                 self.code_display.setPlainText(content)
                 self.current_file_label.setText(f"📄 {file_path.name}")
+
+                self.current_editing_file = {
+                    "full_path": str(file_path),
+                    "rel_path": str(file_path.relative_to(self.project_path)),
+                    "name": file_path.name
+                }
+                self.original_content = content
+
+                if self.edit_mode:
+                    self.code_display.setReadOnly(False)
+                    self.submit_btn.setVisible(True)
+                    self.submit_btn.setEnabled(False)
+                else:
+                    self.code_display.setReadOnly(True)
+                    self.submit_btn.setVisible(False)
+
             except Exception as e:
                 self.code_display.setPlainText(f"无法读取文件: {e}")
 
     def switch_tab(self, tab_name):
-        """切换代码标签页"""
         tabs = {"code": 0, "diff": 1, "test": 2}
         self.code_stack.setCurrentIndex(tabs.get(tab_name, 0))
         self.code_tab_btn.setChecked(tab_name == "code")
@@ -505,7 +651,6 @@ class ConsolePage(QWidget):
         self.test_tab_btn.setChecked(tab_name == "test")
 
     def show_diff(self, file_path, old_content, new_content):
-        """显示代码差异"""
         import difflib
         old_lines = old_content.splitlines()
         new_lines = new_content.splitlines()
@@ -520,8 +665,9 @@ class ConsolePage(QWidget):
         self.switch_tab("diff")
         self.add_log(f"显示文件 {file_path} 的修改差异", "info")
 
+    # ========== 信号和槽 ==========
+
     def set_worker(self, worker):
-        """设置工作线程"""
         self.worker = worker
         worker.log_signal.connect(self.add_log)
         worker.status_signal.connect(self.on_status_change)
@@ -532,8 +678,7 @@ class ConsolePage(QWidget):
         worker.error_signal.connect(lambda e: self.add_log(f"错误: {e}", "error"))
         worker.diff_signal.connect(self.show_diff)
 
-    # ========== 按钮事件 ==========
-
+        worker.state_signal.connect(self.on_state_changed)
     def on_execute_clicked(self):
         task = self.task_input.toPlainText().strip()
         if not task:
@@ -541,6 +686,19 @@ class ConsolePage(QWidget):
             return
         self.execute_signal.emit(task)
 
+    def on_state_changed(self, state: str):
+        """状态变更时更新 UI"""
+        state_map = {
+            "idle": "● 就绪",
+            "planning": "⏳ 规划中",
+            "waiting_confirm": "⏸ 等待确认",
+            "executing": "🔄 执行中",
+            "tool_executing": "🔧 工具执行中",
+            "modifying": "✏️ 修改中",
+            "paused": "⏸ 已暂停",
+            "cancelled": "✖ 已取消",
+        }
+        self.status_label.setText(state_map.get(state, f"● {state}"))
     def on_pause_clicked(self):
         if self.worker:
             self.worker.pause()
@@ -555,7 +713,11 @@ class ConsolePage(QWidget):
                 self.pause_btn.setEnabled(True)
                 self.resume_btn.setEnabled(False)
             else:
-                self.worker.handle_chat_message("恢复执行")
+
+                if hasattr(self.worker, 'handle_user_input'):
+                    self.worker.handle_user_input("恢复执行")
+                else:
+                    self.worker.handle_chat_message("恢复执行")
         self.add_log("恢复执行...", "info")
 
     def on_cancel_clicked(self):
@@ -569,21 +731,21 @@ class ConsolePage(QWidget):
         self.step_list.clear()
         self.code_display.clear()
         self.current_file_label.setText("未打开文件")
+        self.current_editing_file = None
+        self.original_content = None
 
     def clear_log(self):
         self.log_browser.clear()
-    def send_user_message(self):
 
-        """发送用户消息"""
-        message = self.message_input.text().strip()  # QLineEdit 用 .text()
+    def send_user_message(self):
+        message = self.message_input.text().strip()
         if not message:
             return
         self.add_log(f"👤 用户: {message}", "user")
         self.message_input.clear()
 
         if self.waiting_for_response:
-            if hasattr(self, 'pending_context') and self.pending_context and self.pending_context.get(
-                    "action") == "modify_plan":
+            if hasattr(self, 'pending_context') and self.pending_context and self.pending_context.get("action") == "modify_plan":
                 self.waiting_for_response = False
                 if self.worker:
                     self.worker.on_modify_feedback(message)
@@ -593,11 +755,11 @@ class ConsolePage(QWidget):
                 if self.worker:
                     self.worker.on_user_response(message, getattr(self, 'pending_context', None))
         else:
-            if self.worker and hasattr(self.worker, 'handle_chat_message'):
-                self.worker.handle_chat_message(message)
+            # 修改这里：handle_chat_message → handle_user_input
+            if self.worker and hasattr(self.worker, 'handle_user_input'):
+                self.worker.handle_user_input(message)
             elif self.worker:
                 self.worker.on_user_response(message, {})
-    # ========== 信号处理 ==========
 
     def on_status_change(self, status):
         status_text = {
@@ -641,8 +803,6 @@ class ConsolePage(QWidget):
 
         self.options_widget.setVisible(False)
         self.waiting_for_response = False
-
-    # ========== UI 更新方法 ==========
 
     def add_log(self, message, level="info"):
         colors = {

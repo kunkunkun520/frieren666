@@ -144,7 +144,7 @@ class ContextManager:
         self.memory_dir = self.workspace_path / "memory"
         self.memory_dir.mkdir(parents=True, exist_ok=True)
         self.agents_path = self.workspace_path / "AGENTS.md"
-
+        self._relevant_cache = {}
         self.current_session: Optional[Session] = None
         self.current_steps: List[Step] = []
         self.file_index = {"files": {}, "exports": {}}
@@ -565,7 +565,13 @@ class ContextManager:
     # ========== 新增：相关模块检索 ==========
 
     def get_relevant_context(self, current_step: Step) -> str:
-        """让模型判断需要哪些已完成步骤的上下文"""
+        """让模型判断需要哪些已完成步骤的上下文（带缓存）"""
+
+        # 检查缓存
+        cache_key = f"{current_step.id}_{current_step.description}"
+        if cache_key in self._relevant_cache:
+            print(f"使用缓存的相关模块上下文")
+            return self._relevant_cache[cache_key]
 
         if self.llm_client is None:
             return ""
@@ -574,27 +580,27 @@ class ContextManager:
         if not completed_steps:
             return ""
 
-        # 构建候选列表（粗筛：最多 10 个）
+        # 构建候选列表（最多 10 个）
         candidates = completed_steps[:10]
 
         completed_summary = []
         for s in candidates:
             completed_summary.append(f"""
-### Step {s.id}: {s.description}
-**文件**：{s.files_modified}
-**提供**：{s.exported_api or s.design_notes or '无摘要'}
-""")
+    ### Step {s.id}: {s.description}
+    **文件**：{s.files_modified}
+    **提供**：{s.exported_api or s.design_notes or '无摘要'}
+    """)
 
         prompt = f"""
-        当前任务：{current_step.description}
-        
-        已完成的所有步骤：
-        {chr(10).join(completed_summary)}
-        
-        请判断：上述步骤中，**哪些和当前任务相关**？
-        只输出相关步骤的 ID，用逗号分隔，如：1,3,5
-        如果没有相关的，输出"无"。
-        """
+    当前任务：{current_step.description}
+
+    已完成的所有步骤：
+    {chr(10).join(completed_summary)}
+
+    请判断：上述步骤中，哪些和当前任务相关？
+    只输出相关步骤的 ID，用逗号分隔，如：1,3,5
+    如果没有相关的，输出"无"。
+    """
 
         try:
             response = self.llm_client.chat([
@@ -603,6 +609,7 @@ class ContextManager:
             ])
 
             if response.strip() == "无":
+                self._relevant_cache[cache_key] = ""
                 return ""
 
             relevant_ids = [int(x.strip()) for x in response.split(',') if x.strip().isdigit()]
@@ -612,20 +619,26 @@ class ContextManager:
                 s = self.get_step_by_id(sid)
                 if s:
                     relevant_context.append(f"""
-### 相关模块：{s.description}
-**文件**：{s.files_modified}
-**设计意图**：{s.design_notes or '无'}
-**导出接口**：{s.exported_api or '无'}
-""")
+    ### 相关模块：{s.description}
+    **文件**：{s.files_modified}
+    **设计意图**：{s.design_notes or '无'}
+    **导出接口**：{s.exported_api or '无'}
+    """)
 
             if relevant_context:
-                return "## 相关模块上下文\n" + "\n".join(relevant_context)
+                result = "## 相关模块上下文\n" + "\n".join(relevant_context)
+                self._relevant_cache[cache_key] = result
+                return result
 
         except Exception as e:
             print(f"检索相关模块失败: {e}")
 
+        self._relevant_cache[cache_key] = ""
         return ""
 
+    def clear_relevant_cache(self):
+        """清空相关模块缓存"""
+        self._relevant_cache = {}
     # ========== 新增：统一上下文入口 ==========
 
     def get_full_context_for_step(self, step: Step) -> str:
@@ -633,8 +646,27 @@ class ContextManager:
 
         parts = []
 
-        # 1. 项目约定
+        # ========== 强约束放最前面 ==========
         agents = self.read_agents_md()
+        constraints = self._extract_constraints(agents)
+
+        parts.append(f"""## ⚠️ 重要约束 - 必须严格遵守
+
+    {constraints}
+
+    **通用禁止事项**：
+    1. 禁止导入「可用依赖」清单之外的任何第三方库
+    2. 禁止导入项目中不存在的模块
+    3. 禁止自己创建新的工具文件（如 logger.util.js、helpers.py 等）
+    4. 如需新依赖，在代码注释中标注 # DEPENDENCY: xxx，等待确认
+    5. 使用项目已有的模块时，必须按照「项目结构」中的路径正确导入
+
+    **导入规则**：
+    - 导入项目内部模块：根据「项目结构」中的路径
+    - 例如：User 模型在 src/models/user.py，则写 `from src.models.user import User`
+    """)
+
+        # 1. 项目约定
         if agents:
             parts.append(f"## 项目约定\n{agents}")
 
@@ -662,14 +694,37 @@ class ContextManager:
 
         return "\n\n".join(parts)
 
-    def get_context_for_modify(self, user_request: str) -> str:
-        """为修改请求组装上下文（不包含当前任务）"""
+    def _extract_constraints(self, agents_md: str) -> str:
+        """从 AGENTS.md 中提取约束信息"""
+        if not agents_md:
+            return "- 暂无特殊约束"
 
+        lines = []
+        # 提取「可用依赖」部分
+        if "## 可用依赖" in agents_md:
+            lines.append("**可用依赖清单**：")
+            dep_section = agents_md.split("## 可用依赖")[1].split("##")[0]
+            for line in dep_section.strip().split('\n'):
+                if line.strip() and not line.strip().startswith('#'):
+                    lines.append(line.strip())
+
+        # 提取「禁止事项」部分
+        if "## 禁止事项" in agents_md:
+            lines.append("\n**项目特定禁止事项**：")
+            ban_section = agents_md.split("## 禁止事项")[1].split("##")[0]
+            for line in ban_section.strip().split('\n'):
+                if line.strip() and not line.strip().startswith('#'):
+                    lines.append(line.strip())
+
+        return '\n'.join(lines) if lines else "- 暂无特殊约束"
+
+    def get_context_for_modify(self, user_request: str) -> str:
         parts = []
 
+        # 项目约定放在最前面
         agents = self.read_agents_md()
         if agents:
-            parts.append(f"## 项目约定\n{agents}")
+            parts.append(f"## ⚠️ 项目约定（必须遵守）\n{agents}")
 
         memory = self.read_memory_md()
         if memory:
@@ -689,92 +744,73 @@ class ContextManager:
     # ========== 新增：让模型写摘要 ==========
 
     def generate_step_summary(self, step: Step, code: str) -> tuple:
-        """让模型为完成的步骤写摘要和设计意图"""
+        """让模型为完成的步骤写摘要和设计意图（合并为一次调用）"""
 
         if self.llm_client is None:
             return code[:200] + "...", None
 
-        # 写工作摘要
-        summary_prompt = f"""
-        你刚完成了任务：{step.description}
-        文件：{step.files_modified}
-        代码：
-        ```{step.files_modified[0].split('.')[-1] if step.files_modified else 'python'}
-        {code[:800]}...
-        请用 2-3 句话总结这个模块：
-
-        提供了什么
-
-        关键字段/方法
-
-        需要注意的点
-
-        直接输出摘要。
-        """
-
+        prompt = f"""
+    你刚完成了任务：{step.description}
+    文件：{step.files_modified}
+    代码：
+    ```{step.files_modified[0].split('.')[-1] if step.files_modified else 'python'}
+    {code[:800]}...
+        请输出 JSON 格式：
+    {{
+    "summary": "2-3句话总结这个模块（提供了什么、关键字段/方法、注意点）",
+    "design_notes": "给后续开发者的设计意图（核心API、约束、陷阱、模块关系）"
+    }}
+    
+    只输出 JSON，不要其他内容。
+    """
         try:
-            summary = self.llm_client.chat([
-                {"role": "system", "content": "你是代码总结专家。"},
-                {"role": "user", "content": summary_prompt}
+            response = self.llm_client.chat([
+                {"role": "system", "content": "你是代码总结专家，输出必须是合法 JSON。"},
+                {"role": "user", "content": prompt}
             ])
+            import json
+            import re
+            json_match = re.search(r'{.*}', response, re.DOTALL)
+            if json_match:
+                data = json.loads(json_match.group())
+                summary = data.get("summary", f"完成 {step.description}")
+                design_notes = data.get("design_notes")
+            else:
+                summary = f"完成 {step.description}"
+                design_notes = None
+
         except Exception as e:
             summary = f"完成 {step.description}"
-
-        # 写设计意图
-        design_prompt = f"""
-        你刚完成了：{step.description}
-        代码：{code[:800]}...
-
-        请写一段设计意图，给后续依赖这个模块的开发者看。
-
-        包含：
-
-        这个模块提供了什么（核心 API）
-
-        使用时需要注意什么（约束、陷阱）
-
-        和其他模块的关系（如果有）
-
-        用 3-5 行，紧凑格式。
-        直接输出。
-        """
-
-        try:
-            design_notes = self.llm_client.chat([
-                {"role": "system", "content": "你是软件架构专家。"},
-                {"role": "user", "content": design_prompt}
-            ])
-        except Exception as e:
             design_notes = None
-
         return summary, design_notes
 
-    def generate_file_summary_for_index(self, file_path: str, code: str) -> str:
+    def generate_file_summary_for_index(self, file_path: str, code: str, existing_summary: str = None) -> str:
         """为文件写一行摘要，用于项目结构展示"""
 
+        # 如果已有 summary，直接提取第一句
+        if existing_summary:
+            first_sentence = existing_summary.split("。")[0].strip()
+            if first_sentence:
+                return f"→ {first_sentence}。"
+
+        # 否则让模型写（极少用到）
         if self.llm_client is None:
             return ""
 
         prompt = f"""
-        文件：{file_path}
-        代码：{code[:500]}...
+    文件：{file_path}
+    代码：{code[:500]}...
 
-        用一行话总结这个文件提供了什么（不超过 20 个字）。
-        格式：→ [摘要]
+    用一行话总结这个文件提供了什么（不超过 20 个字）。
+    格式：→ [摘要]
 
-        示例：
-        → User 模型 (id, username, email)
-        → login(), register() 认证函数
-        → 数据库连接和 Base 类
-        → 首页模板
-
-        直接输出，不要解释。
-        """
+    直接输出，不要解释。
+    """
 
         try:
             return self.llm_client.chat([
                 {"role": "system", "content": "你是代码总结专家，只输出一行摘要。"},
                 {"role": "user", "content": prompt}
             ])
-        except Exception as e:
+        except:
             return self._get_type_hint(Path(file_path))

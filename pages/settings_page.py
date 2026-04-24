@@ -13,25 +13,64 @@ from PySide6.QtCore import Qt, QThread, Signal
 
 
 class FetchModelsThread(QThread):
-    """获取模型列表的线程"""
     finished = Signal(list)
     error = Signal(str)
 
-    def __init__(self, base_url):
+    def __init__(self, base_url, provider, api_key=""):
         super().__init__()
         self.base_url = base_url
+        self.provider = provider
+        self.api_key = api_key
 
     def run(self):
         try:
-            url = self.base_url.rstrip('/') + "/api/tags"
-            response = requests.get(url, timeout=5)
-            if response.status_code == 200:
-                models = [m["name"] for m in response.json().get("models", [])]
-                self.finished.emit(models)
+            if self.provider == "ollama":
+                self._fetch_ollama()
+            elif self.provider in ["openai", "openai_compatible"]:
+                self._fetch_openai()
+            elif self.provider == "anthropic":
+                self._fetch_anthropic()
             else:
-                self.error.emit(f"HTTP {response.status_code}")
+                self.error.emit(f"不支持的提供商: {self.provider}")
         except Exception as e:
             self.error.emit(str(e))
+
+    def _fetch_ollama(self):
+        url = self.base_url.rstrip('/') + "/api/tags"
+        response = requests.get(url, timeout=5)
+        if response.status_code == 200:
+            models = [m["name"] for m in response.json().get("models", [])]
+            self.finished.emit(models)
+        else:
+            self.error.emit(f"HTTP {response.status_code}")
+
+    def _fetch_openai(self):
+        # OpenAI 兼容 API 的模型列表
+        url = self.base_url.rstrip('/') + "/models"
+        headers = {}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            models = [m["id"] for m in data.get("data", [])]
+            # 过滤掉一些不常用的模型
+            models = [m for m in models if not m.startswith("whisper") and not m.startswith("tts")]
+            self.finished.emit(models)
+        else:
+            self.error.emit(f"HTTP {response.status_code}")
+
+    def _fetch_anthropic(self):
+        # Anthropic 的模型列表是固定的
+        models = [
+            "claude-3-opus-20240229",
+            "claude-3-sonnet-20240229",
+            "claude-3-haiku-20240307",
+            "claude-3-5-sonnet-20240620",
+            "claude-3-5-haiku-20241022",
+        ]
+        self.finished.emit(models)
 
 
 class SettingsPage(QWidget):
@@ -321,9 +360,12 @@ class SettingsPage(QWidget):
             if provider == "ollama":
                 self.planner_api_key.setVisible(False)
                 self.planner_url.setVisible(True)
-            elif provider in ["openai", "openai_compatible", "anthropic"]:
+            elif provider in ["openai", "openai_compatible"]:
                 self.planner_api_key.setVisible(True)
-                self.planner_url.setVisible(provider != "anthropic")
+                self.planner_url.setVisible(True)
+            elif provider == "anthropic":
+                self.planner_api_key.setVisible(True)
+                self.planner_url.setVisible(False)  # Anthropic 不需要 base_url
 
     def on_same_as_planner_toggled(self, checked):
         """Coder 是否复用 Planner 配置"""
@@ -332,22 +374,28 @@ class SettingsPage(QWidget):
     def refresh_model_list(self, role):
         """刷新模型列表"""
         if role == "planner":
+            provider = self.planner_provider.currentText()
             base_url = self.planner_url.text()
+            api_key = self.planner_api_key.text()
             combo = self.planner_model
             status_label = self.planner_status
         elif role == "coder":
+            provider = self.coder_provider.currentText()
             base_url = self.coder_url.text()
+            api_key = self.coder_api_key.text()
             combo = self.coder_model
             status_label = self.coder_status
-        else:
+        else:  # judge
+            provider = self.judge_provider.currentText()
             base_url = self.judge_url.text()
+            api_key = self.judge_api_key.text()
             combo = self.judge_model
             status_label = self.judge_status
 
         status_label.setText("⏳ 获取模型中...")
         status_label.setStyleSheet("color: #dcdcaa;")
 
-        self.fetch_thread = FetchModelsThread(base_url)
+        self.fetch_thread = FetchModelsThread(base_url, provider, api_key)
         self.fetch_thread.finished.connect(lambda models: self.on_models_fetched(combo, status_label, models))
         self.fetch_thread.error.connect(lambda e: self.on_models_error(status_label, e))
         self.fetch_thread.start()
