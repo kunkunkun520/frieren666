@@ -23,7 +23,6 @@ class ConsolePage(QWidget):
     execute_signal = Signal(str)
     pause_signal = Signal()
     clear_signal = Signal()
-
     def __init__(self):
         super().__init__()
         self.worker = None
@@ -31,8 +30,6 @@ class ConsolePage(QWidget):
         self.pending_context = None
         self.pending_options = []
         self.project_path = None
-
-        # 编辑相关状态
         self.current_editing_file = None
         self.original_content = None
         self.edit_mode = False
@@ -167,13 +164,15 @@ class ConsolePage(QWidget):
         self.progress_bar.setVisible(False)
         self.progress_bar.setMaximumHeight(3)
         layout.addWidget(self.progress_bar)
+
     def _create_left_panel(self):
-        """创建左侧面板（文件树 + 计划 + 任务输入）"""
+        """创建左侧面板（文件树 + 计划）"""
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(2, 2, 2, 2)
         layout.setSpacing(6)
 
+        # 文件树
         file_group = QGroupBox("📁 文件结构")
         file_layout = QVBoxLayout(file_group)
         file_layout.setSpacing(4)
@@ -194,8 +193,9 @@ class ConsolePage(QWidget):
         self.file_tree.itemDoubleClicked.connect(self.on_file_double_clicked)
         file_layout.addWidget(self.file_tree)
 
-        layout.addWidget(file_group, stretch=4)
+        layout.addWidget(file_group, stretch=3)
 
+        # 计划
         plan_group = QGroupBox("📋 计划")
         plan_layout = QVBoxLayout(plan_group)
         plan_layout.setSpacing(4)
@@ -204,74 +204,6 @@ class ConsolePage(QWidget):
         plan_layout.addWidget(self.step_list)
 
         layout.addWidget(plan_group, stretch=2)
-
-        task_group = QGroupBox("📝 任务")
-        task_layout = QVBoxLayout(task_group)
-        task_layout.setSpacing(6)
-
-        self.task_input = QTextEdit()
-        self.task_input.setPlaceholderText("描述你想要创建的项目...")
-        self.task_input.setFixedHeight(70)
-        task_layout.addWidget(self.task_input)
-
-        btn_layout = QHBoxLayout()
-        btn_layout.setSpacing(4)
-
-        self.execute_btn = QPushButton("▶ 执行")
-        self.execute_btn.setObjectName("ExecuteButton")
-        self.execute_btn.setCursor(Qt.PointingHandCursor)
-        self.execute_btn.clicked.connect(self.on_execute_clicked)
-        self.execute_btn.setStyleSheet("""
-            #ExecuteButton {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                                            stop:0 #13a10e, stop:1 #16c60c);
-                border: none;
-                border-radius: 16px;
-                padding: 6px 12px;
-                color: white;
-                font-weight: bold;
-            }
-            #ExecuteButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                                            stop:0 #16c60c, stop:1 #1ae610);
-            }
-            #ExecuteButton:disabled {
-                background: #4a4a4a;
-                color: #808080;
-            }
-        """)
-
-        self.pause_btn = QPushButton("⏸")
-        self.pause_btn.setEnabled(False)
-        self.pause_btn.setFixedWidth(36)
-        self.pause_btn.setCursor(Qt.PointingHandCursor)
-        self.pause_btn.clicked.connect(self.on_pause_clicked)
-
-        self.resume_btn = QPushButton("▶")
-        self.resume_btn.setEnabled(False)
-        self.resume_btn.setFixedWidth(36)
-        self.resume_btn.setCursor(Qt.PointingHandCursor)
-        self.resume_btn.clicked.connect(self.on_resume_clicked)
-
-        self.cancel_btn = QPushButton("✖")
-        self.cancel_btn.setEnabled(False)
-        self.cancel_btn.setFixedWidth(36)
-        self.cancel_btn.setCursor(Qt.PointingHandCursor)
-        self.cancel_btn.clicked.connect(self.on_cancel_clicked)
-
-        self.clear_btn = QPushButton("⬚")
-        self.clear_btn.setFixedWidth(36)
-        self.clear_btn.setCursor(Qt.PointingHandCursor)
-        self.clear_btn.clicked.connect(self.on_clear_clicked)
-
-        btn_layout.addWidget(self.execute_btn)
-        btn_layout.addWidget(self.pause_btn)
-        btn_layout.addWidget(self.resume_btn)
-        btn_layout.addWidget(self.cancel_btn)
-        btn_layout.addWidget(self.clear_btn)
-
-        task_layout.addLayout(btn_layout)
-        layout.addWidget(task_group, stretch=0)
 
         return panel
 

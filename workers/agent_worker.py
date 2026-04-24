@@ -33,8 +33,7 @@ class AgentWorker(QThread):
     finished_signal = Signal(dict)
     error_signal = Signal(str)
     diff_signal = Signal(str, str, str)
-    state_signal = Signal(str)  # 新增：状态变更信号
-
+    state_signal = Signal(str)
     def __init__(self, user_task: str, workspace_path: Path, is_load_mode: bool = False, session_id: str = None):
         super().__init__()
         self.user_task = user_task
@@ -95,14 +94,27 @@ class AgentWorker(QThread):
         self.add_log(f"📌 {reason or f'状态: {new_state.value}'}", "info")
         self._flush_logs()
 
-    # ========== 统一入口 ==========
-
     def run(self):
         QApplication.processEvents()
         try:
             if self.is_load_mode:
                 self.sm.force_transition(AgentState.IDLE)
+
+                # 加载已有计划到 UI
+                if self.steps:
+                    step_descriptions = [f"{s.id}. {s.description}" for s in self.steps]
+                    self.plan_signal.emit(step_descriptions)
+
+                    for step in self.steps:
+                        if step.status == StepStatus.SUCCESS.value:
+                            self.step_signal.emit(step.id, "success", step.description)
+                        elif step.status == StepStatus.FAILED.value:
+                            self.step_signal.emit(step.id, "failed", step.description)
+                        elif step.status == StepStatus.RUNNING.value:
+                            self.step_signal.emit(step.id, "running", step.description)
+
                 self.add_log("📁 已加载会话", "success")
+                self.add_log("输入「恢复执行」继续未完成的任务", "info")
                 self._flush_logs()
             else:
                 self.sm.transition_to(AgentState.PLANNING, "开始规划")
