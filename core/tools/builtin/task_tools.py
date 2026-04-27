@@ -15,7 +15,7 @@ class GetStatusTool(BaseTool):
 
     @property
     def description(self) -> str:
-        return "获取当前任务进度。当用户问「进度怎么样」「做到哪了」「还有多少步骤」时使用。"
+        return "获取任务进度的数字统计（总步骤、已完成、失败、待执行）。当用户问「进度怎么样」「还有多少」时使用。注意：如果需要知道具体某一步做了什么，应该使用 search_memory 工具。"
 
     @property
     def parameters(self) -> Dict[str, Any]:

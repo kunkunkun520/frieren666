@@ -134,7 +134,7 @@ class ContextManager:
     def __init__(self, workspace_path: Path, llm_client=None):
         self.workspace_path = Path(workspace_path)
         self.llm_client = llm_client  # 用于让模型写摘要、检索等
-
+        self._rag_manager = None
         # 原有路径
         self.sessions_path = self.workspace_path / "sessions"
         self.sessions_path.mkdir(parents=True, exist_ok=True)
@@ -190,6 +190,46 @@ class ContextManager:
         self.current_session.updated_at = datetime.now().isoformat()
         self._save_session()
 
+    def get_rag_manager(self):
+        """延迟初始化 RAG"""
+        if self._rag_manager is None and self.llm_client:
+            from core.rag.rag_manager import RAGManager
+            from utils.config import Config
+
+            config = Config()
+            rag_config = config.get_rag_config()
+
+            self._rag_manager = RAGManager(
+                workspace_path=self.workspace_path,
+                config=rag_config,
+                context_manager=self
+            )
+
+            if not self._rag_manager.index_built:
+                print("RAG 索引不存在，开始构建...")
+                try:
+                    self._rag_manager.build_index()
+                except Exception as e:
+                    print(f"RAG 索引构建失败: {e}")
+                    self._rag_manager = None
+
+        return self._rag_manager
+
+    def search_memory_rag(self, query: str, top_k: int = 5) -> str:
+        """使用 RAG 检索记忆"""
+        rag = self.get_rag_manager()
+        if rag:
+            return rag.search_formatted(query, top_k)
+        return ""
+
+    def add_to_rag_index(self, content: str, source: str, doc_type: str):
+        """增量添加到 RAG 索引"""
+        rag = self.get_rag_manager()
+        if rag:
+            try:
+                rag.add_document(content, source, doc_type)
+            except Exception as e:
+                print(f"RAG 增量添加失败: {e}")
     def update_step_status(self, step_id: int, status: str, result: str = None, error: str = None):
         """更新步骤状态"""
         for step in self.current_steps:

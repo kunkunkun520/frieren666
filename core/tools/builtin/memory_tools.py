@@ -7,7 +7,7 @@ from core.tools.base import BaseTool
 
 
 class SearchMemoryTool(BaseTool):
-    """搜索记忆"""
+    """搜索记忆 - 优先使用 RAG，降级到全文检索"""
 
     @property
     def name(self) -> str:
@@ -15,7 +15,7 @@ class SearchMemoryTool(BaseTool):
 
     @property
     def description(self) -> str:
-        return "从项目记忆中搜索信息。当用户问「之前怎么做的」「xxx 是怎么实现的」「回忆一下」时使用。"
+        return "搜索项目记忆的具体内容。当用户问「第 x 步做了什么」「之前怎么实现的」「xxx 功能在哪」「回忆一下」时使用。可以搜索步骤详情、代码摘要、设计意图。"
 
     @property
     def parameters(self) -> Dict[str, Any]:
@@ -29,6 +29,10 @@ class SearchMemoryTool(BaseTool):
                 "days": {
                     "type": "number",
                     "description": "搜索最近几天的记忆，默认 7 天"
+                },
+                "filter_type": {
+                    "type": "string",
+                    "description": "过滤类型: long_term_memory, daily_log, code_summary, design_note。不填则搜索全部"
                 }
             },
             "required": ["query"]
@@ -37,6 +41,7 @@ class SearchMemoryTool(BaseTool):
     def execute(self, params: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
         query = params.get("query")
         days = params.get("days", 7)
+        filter_type = params.get("filter_type")
 
         if not query:
             return {"success": False, "error": "缺少搜索内容"}
@@ -44,11 +49,23 @@ class SearchMemoryTool(BaseTool):
         context_manager = context.get("context_manager")
         worker = context.get("worker")
 
-        # 获取记忆内容
+        # 优先使用 RAG 检索
+        try:
+            rag_result = context_manager.search_memory_rag(query, top_k=5)
+            if rag_result:
+                return {
+                    "success": True,
+                    "result": rag_result,
+                    "query": query,
+                    "method": "rag"
+                }
+        except Exception as e:
+            print(f"RAG 检索失败，降级到全文检索: {e}")
+
+        # 降级：使用原有全文检索
         memory = context_manager.read_memory_md()
         recent_logs = context_manager.read_recent_logs(days=days)
 
-        # 让 LLM 从记忆中检索相关信息
         search_prompt = f"""
 ## 长期记忆
 {memory[:2000] if memory else "无"}
@@ -71,7 +88,8 @@ class SearchMemoryTool(BaseTool):
             return {
                 "success": True,
                 "result": response,
-                "query": query
+                "query": query,
+                "method": "fulltext"
             }
         except Exception as e:
             return {"success": False, "error": str(e)}

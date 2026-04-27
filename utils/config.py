@@ -39,7 +39,13 @@ DEFAULT_CONFIG = {
         "retry_count": 3,
         "score_threshold": 80,
         "workspace_path": "~/archon_workspace"
-    }
+    },
+    "rag": {
+            "embedding_provider": "ollama",
+            "embedding_model": "nomic-embed-text",
+            "embedding_base_url": "http://localhost:11434",
+            "embedding_api_key": ""
+        }
 }
 
 
@@ -93,3 +99,11 @@ class Config:
             advanced = json.loads(advanced)
         path = advanced.get("workspace_path", "~/archon_workspace")
         return Path(os.path.expanduser(path))
+    def get_rag_config(self) -> dict:
+
+        config = self.get("rag", DEFAULT_CONFIG["rag"])
+        if isinstance(config, str):
+            config = json.loads(config)
+        return config
+    def save_rag_config(self, config: dict):
+        self.set("rag", config)

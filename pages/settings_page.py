@@ -539,7 +539,77 @@ class SettingsPage(QWidget):
 
         layout.addWidget(judge_group)
         layout.addStretch()
+        embed_group = QGroupBox("🔍 RAG Embedding 模型配置")
+        embed_layout = QVBoxLayout(embed_group)
+        embed_layout.setSpacing(16)
 
+        row_e1 = QHBoxLayout()
+        row_e1.setSpacing(20)
+
+        # 提供商
+        e_prov_widget = QWidget()
+        e_prov_layout = QVBoxLayout(e_prov_widget)
+        e_prov_layout.setContentsMargins(0, 0, 0, 0)
+        e_prov_layout.setSpacing(6)
+        e_prov_layout.addWidget(self._create_section_label("Embedding 提供商"))
+        self.embed_provider = QComboBox()
+        self.embed_provider.addItems(["ollama", "openai", "openai_compatible"])
+        self.embed_provider.currentTextChanged.connect(self.on_embed_provider_changed)
+        e_prov_layout.addWidget(self.embed_provider)
+        row_e1.addWidget(e_prov_widget)
+
+        # API 地址
+        e_url_widget = QWidget()
+        e_url_layout = QVBoxLayout(e_url_widget)
+        e_url_layout.setContentsMargins(0, 0, 0, 0)
+        e_url_layout.setSpacing(6)
+        e_url_layout.addWidget(self._create_section_label("Embedding API 地址"))
+        self.embed_url = QLineEdit("http://localhost:11434")
+        e_url_layout.addWidget(self.embed_url)
+        row_e1.addWidget(e_url_widget)
+
+        embed_layout.addLayout(row_e1)
+
+        row_e2 = QHBoxLayout()
+        row_e2.setSpacing(20)
+
+        # API 密钥
+        e_key_widget = QWidget()
+        e_key_layout = QVBoxLayout(e_key_widget)
+        e_key_layout.setContentsMargins(0, 0, 0, 0)
+        e_key_layout.setSpacing(6)
+        e_key_layout.addWidget(self._create_section_label("Embedding API 密钥"))
+        self.embed_api_key = QLineEdit()
+        self.embed_api_key.setEchoMode(QLineEdit.Password)
+        self.embed_api_key.setVisible(False)
+        e_key_layout.addWidget(self.embed_api_key)
+        row_e2.addWidget(e_key_widget)
+
+        # 模型
+        e_model_widget = QWidget()
+        e_model_layout = QVBoxLayout(e_model_widget)
+        e_model_layout.setContentsMargins(0, 0, 0, 0)
+        e_model_layout.setSpacing(6)
+        e_model_layout.addWidget(self._create_section_label("Embedding 模型"))
+        e_model_row = QHBoxLayout()
+        self.embed_model = QComboBox()
+        self.embed_model.setEditable(True)
+        self.embed_model.setPlaceholderText("选择 Embedding 模型")
+        e_model_row.addWidget(self.embed_model, stretch=1)
+        self.refresh_embed_btn = QPushButton("🔄 刷新")
+        self.refresh_embed_btn.clicked.connect(self.refresh_embedding_models)
+        e_model_row.addWidget(self.refresh_embed_btn)
+        e_model_layout.addLayout(e_model_row)
+        row_e2.addWidget(e_model_widget)
+
+        embed_layout.addLayout(row_e2)
+
+        self.embed_status = QLabel("⚪ 未测试")
+        self.embed_status.setStyleSheet("color: #a0a0a0; font-size: 12px;")
+        embed_layout.addWidget(self.embed_status)
+
+        layout.addWidget(embed_group)
+        layout.addStretch()
         return widget
 
     def _create_advanced_tab(self):
@@ -716,6 +786,43 @@ class SettingsPage(QWidget):
         self.fetch_thread.error.connect(lambda e: self.on_models_error(status_label, e))
         self.fetch_thread.start()
 
+    def on_embed_provider_changed(self):
+        """Embedding 提供商变更"""
+        provider = self.embed_provider.currentText()
+        if provider == "ollama":
+            self.embed_api_key.setVisible(False)
+            self.embed_url.setVisible(True)
+            self.embed_model.clear()
+            self.embed_model.addItems(["nomic-embed-text", "all-minilm"])
+        elif provider in ["openai", "openai_compatible"]:
+            self.embed_api_key.setVisible(True)
+            self.embed_url.setVisible(True)
+            self.embed_model.clear()
+            self.embed_model.addItems([
+                "text-embedding-3-small",
+                "text-embedding-3-large",
+                "text-embedding-ada-002"
+            ])
+
+    def refresh_embedding_models(self):
+        """刷新 Embedding 模型列表"""
+        provider = self.embed_provider.currentText()
+        base_url = self.embed_url.text()
+        api_key = self.embed_api_key.text()
+
+        self.embed_status.setText("⏳ 获取模型中...")
+        self.embed_status.setStyleSheet("color: #dcdcaa; font-size: 12px;")
+
+        from core.rag.embedder import EmbedderFactory
+        try:
+            models = EmbedderFactory.get_available_embedding_models(provider, base_url, api_key)
+            self.embed_model.clear()
+            self.embed_model.addItems(models)
+            self.embed_status.setText(f"✅ 找到 {len(models)} 个模型")
+            self.embed_status.setStyleSheet("color: #6a9955; font-size: 12px;")
+        except Exception as e:
+            self.embed_status.setText(f"❌ 获取失败: {e}")
+            self.embed_status.setStyleSheet("color: #f14c4c; font-size: 12px;")
     def on_models_fetched(self, combo, status_label, models):
         combo.clear()
         if models:
@@ -746,7 +853,11 @@ class SettingsPage(QWidget):
         self.retry_count.setValue(3)
         self.score_threshold.setValue(80)
         self.workspace_path.setText("~/archon_workspace")
-
+        self.embed_provider.setCurrentText("ollama")
+        self.embed_url.setText("http://localhost:11434")
+        self.embed_api_key.clear()
+        self.embed_model.clear()
+        self.embed_model.addItems(["nomic-embed-text", "all-minilm"])
     def save_config(self):
         from utils.config import Config
         config = Config()
@@ -783,7 +894,13 @@ class SettingsPage(QWidget):
             "max_tokens": 2048
         }
         config.save_judge_config(judge_config)
-
+        rag_config = {
+            "embedding_provider": self.embed_provider.currentText(),
+            "embedding_model": self.embed_model.currentText(),
+            "embedding_base_url": self.embed_url.text(),
+            "embedding_api_key": self.embed_api_key.text()
+        }
+        config.save_rag_config(rag_config)
         advanced_config = {
             "retry_count": self.retry_count.value(),
             "score_threshold": self.score_threshold.value(),
@@ -792,3 +909,4 @@ class SettingsPage(QWidget):
         config.set("advanced", advanced_config)
 
         QMessageBox.information(self, "保存成功", "配置已保存，下次执行任务时将使用新配置。")
+

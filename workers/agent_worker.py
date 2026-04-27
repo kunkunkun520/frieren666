@@ -1,5 +1,5 @@
 """
-Agent 后台工作线程 - 状态机版本
+Agent 后台工作线程 - 状态机版本 (完整版)
 """
 
 import time
@@ -34,6 +34,7 @@ class AgentWorker(QThread):
     error_signal = Signal(str)
     diff_signal = Signal(str, str, str)
     state_signal = Signal(str)
+
     def __init__(self, user_task: str, workspace_path: Path, is_load_mode: bool = False, session_id: str = None):
         super().__init__()
         self.user_task = user_task
@@ -41,12 +42,10 @@ class AgentWorker(QThread):
         self.is_load_mode = is_load_mode
         self.session_id = session_id
 
-        # 状态机（替代原来的多个布尔值）
         self.sm = StateMachine()
         self.sm.on_transition(self._on_state_changed)
         self.ctx = AgentContext(user_task=user_task)
 
-        # 保留的旧字段（逐步迁移到 ctx）
         self.steps: List[Step] = []
         self.step_status_map = {}
         self.pending_modify_file_path = None
@@ -60,7 +59,6 @@ class AgentWorker(QThread):
 
         self.workspace_path.mkdir(parents=True, exist_ok=True)
 
-        # 配置
         self.config = Config()
         planner_config = self.config.get_planner_config()
         coder_config = self.config.get_coder_config()
@@ -89,7 +87,6 @@ class AgentWorker(QThread):
         self._register_builtin_tools()
 
     def _on_state_changed(self, old_state: AgentState, new_state: AgentState, reason: str):
-        """状态变更时发射信号"""
         self.state_signal.emit(new_state.value)
         self.add_log(f"📌 {reason or f'状态: {new_state.value}'}", "info")
         self._flush_logs()
@@ -99,12 +96,9 @@ class AgentWorker(QThread):
         try:
             if self.is_load_mode:
                 self.sm.force_transition(AgentState.IDLE)
-
-                # 加载已有计划到 UI
                 if self.steps:
                     step_descriptions = [f"{s.id}. {s.description}" for s in self.steps]
                     self.plan_signal.emit(step_descriptions)
-
                     for step in self.steps:
                         if step.status == StepStatus.SUCCESS.value:
                             self.step_signal.emit(step.id, "success", step.description)
@@ -112,7 +106,6 @@ class AgentWorker(QThread):
                             self.step_signal.emit(step.id, "failed", step.description)
                         elif step.status == StepStatus.RUNNING.value:
                             self.step_signal.emit(step.id, "running", step.description)
-
                 self.add_log("📁 已加载会话", "success")
                 self.add_log("输入「恢复执行」继续未完成的任务", "info")
                 self._flush_logs()
@@ -124,11 +117,9 @@ class AgentWorker(QThread):
             self.sm.force_transition(AgentState.IDLE)
 
     def handle_user_input(self, message: str):
-        """统一入口：所有用户输入都走这里"""
         self.add_log(f"👤 用户: {message}", "user")
         self._flush_logs()
 
-        # 特殊快捷命令
         if message == "结束":
             self._save_current_state()
             self.finished_signal.emit({"success": True, "completed": True})
@@ -146,7 +137,6 @@ class AgentWorker(QThread):
                 self.add_log("当前无法恢复执行", "warning")
             return
 
-        # 根据当前状态处理
         if self.sm.state == AgentState.WAITING_CONFIRM:
             self._handle_confirmation(message)
             return
@@ -159,16 +149,12 @@ class AgentWorker(QThread):
             self._handle_idle(message)
             return
 
-        # 默认：聊天处理
         self._handle_chat(message)
 
     def _handle_confirmation(self, message: str):
-        """处理确认状态的用户输入"""
-        # 委托给 on_user_response 的逻辑
         self.on_user_response(message, {"action": self.ctx.pending_action})
 
     def _handle_during_execution(self, message: str):
-        """执行中处理用户输入"""
         intent = self._quick_classify(message)
         if intent == "modify":
             self.sm.transition_to(AgentState.MODIFYING, "执行中穿插修改")
@@ -178,11 +164,9 @@ class AgentWorker(QThread):
             self.sm.transition_to(AgentState.PAUSED, "用户暂停")
             self.pause()
         else:
-            # 聊天或问问题，不改变状态
             self._handle_chat(message)
 
     def _handle_idle(self, message: str):
-        """空闲状态处理用户输入"""
         intent = self._quick_classify(message)
         if intent == "new_task":
             self.sm.transition_to(AgentState.PLANNING, "新任务")
@@ -199,7 +183,6 @@ class AgentWorker(QThread):
             self._handle_chat(message)
 
     def _quick_classify(self, message: str) -> str:
-        """快速意图分类（关键词，不需要 LLM）"""
         modify_keywords = ["修改", "改", "添加", "删除", "更新", "创建", "新建", "生成", "写"]
         task_keywords = ["做一个", "创建一个", "搭建", "开发", "写一个项目"]
         pause_keywords = ["暂停", "停一下", "休息"]
@@ -215,10 +198,7 @@ class AgentWorker(QThread):
             return "modify"
         return "chat"
 
-    # ========== 聊天处理 ==========
-
     def _handle_chat(self, message: str):
-        """ReAct 聊天处理"""
         intent = self._classify_intent_with_llm(message)
 
         if intent.get("tool") == "chat":
@@ -246,8 +226,6 @@ class AgentWorker(QThread):
         self.add_log(f"🤖 Agent: {response}", "ai")
         self._flush_logs()
         self.sm.transition_to(AgentState.IDLE, "工具执行完成")
-
-    # ========== 原有方法（保持不变） ==========
 
     def _register_builtin_tools(self):
         tool_registry.clear()
@@ -285,72 +263,59 @@ class AgentWorker(QThread):
         return code.strip()
 
     def _extract_key_constraints(self, agents_md: str) -> str:
-        """从 AGENTS.md 中提取关键约束"""
         if not agents_md:
             return "暂无项目约定"
-
         lines = []
-
-        # 提取技术栈
         if "## 技术栈" in agents_md:
             tech_section = agents_md.split("## 技术栈")[1].split("##")[0]
             lines.append("**技术栈**:")
             for line in tech_section.strip().split('\n'):
                 if line.strip() and not line.strip().startswith('#'):
                     lines.append(line.strip())
-
-        # 提取可用依赖
         if "## 可用依赖" in agents_md:
             dep_section = agents_md.split("## 可用依赖")[1].split("##")[0]
             lines.append("\n**可用依赖（只能使用这些）**:")
             for line in dep_section.strip().split('\n'):
                 if line.strip() and not line.strip().startswith('#'):
                     lines.append(line.strip())
-
-        # 提取禁止事项
         if "## 禁止事项" in agents_md:
             ban_section = agents_md.split("## 禁止事项")[1].split("##")[0]
             lines.append("\n**禁止事项**:")
             for line in ban_section.strip().split('\n'):
                 if line.strip() and not line.strip().startswith('#'):
                     lines.append(line.strip())
-
         return '\n'.join(lines) if lines else "暂无项目约定"
+
     def _classify_intent_with_llm(self, message: str) -> dict:
         tools_prompt = tool_registry.get_tools_prompt()
         project_structure = self.context.get_project_structure(self.workspace_path)
-
-        # 读取项目约定
         agents_md = self.context.read_agents_md()
-
-        # 提取关键约束
         constraints = self._extract_key_constraints(agents_md)
-
         total = len(self.steps) if self.steps else 0
         completed = sum(1 for s in self.steps if s.status == StepStatus.SUCCESS.value) if self.steps else 0
 
         prompt = f"""## ⚠️ 必须输出 JSON，禁止直接输出代码
 
-    ## 项目约定（必须遵守）
-    {constraints}
+## 项目约定（必须遵守）
+{constraints}
 
-    ## 可用工具
-    {tools_prompt}
+## 可用工具
+{tools_prompt}
 
-    ## 项目状态: 总{total}步, 已完成{completed}步
+## 项目状态: 总{total}步, 已完成{completed}步
 
-    ## 项目结构
-    {project_structure}
+## 项目结构
+{project_structure}
 
-    ## 用户消息
-    {message}
+## 用户消息
+{message}
 
-    ## 重要提醒
-    - 严格遵守项目约定中的技术栈和依赖清单
-    - 如果约定要求 FastAPI，不要生成 Flask 代码
-    - 调用工具时使用项目结构中存在的精确路径
+## 重要提醒
+- 严格遵守项目约定中的技术栈和依赖清单
+- 如果约定要求 FastAPI，不要生成 Flask 代码
+- 调用工具时使用项目结构中存在的精确路径
 
-    输出 JSON：{{"tool": "工具名", "params": {{...}}}} 或 {{"tool": "chat", "params": {{"response": "回复"}}}}"""
+输出 JSON：{{"tool": "工具名", "params": {{...}}}} 或 {{"tool": "chat", "params": {{"response": "回复"}}}}"""
         try:
             response = self._call_llm_with_retry([
                 {"role": "system", "content": "只输出 JSON。"},
@@ -387,8 +352,6 @@ class AgentWorker(QThread):
         except:
             return f"✅ 已完成 {tool_name}" if result.success else f"❌ {result.error}"
 
-    # ========== 日志 ==========
-
     def _emit_log_batch(self):
         if self._pending_logs:
             self.log_signal.emit("\n".join(self._pending_logs), self._log_level)
@@ -410,23 +373,17 @@ class AgentWorker(QThread):
         if self._pending_logs:
             self._emit_log_batch()
 
-    # ========== 任务执行（保持原有逻辑） ==========
-
     def _generate_initial_plan(self):
         self.add_log("正在生成计划...", "info")
         try:
-            # 检查是否已有 AGENTS.md
             existing_agents = self.context.read_agents_md()
-
             if not existing_agents:
-                # 没有约定，生成新的
                 self.add_log("正在推断项目约定...", "info")
                 agents_md = self.planner.generate_agents_md(self.user_task)
                 self.context.save_agents_md(agents_md)
                 self.add_log("项目约定已生成", "success")
             else:
                 self.add_log("使用已有项目约定", "success")
-
             self.steps = self.planner.plan(self.user_task)
             self.context.set_plan(self.steps)
             for step in self.steps:
@@ -453,7 +410,6 @@ class AgentWorker(QThread):
         if not start_step:
             self._finish_execution()
             return
-        # 简化：直接完成
         self._finish_execution()
 
     def _finish_execution(self):
@@ -469,13 +425,9 @@ class AgentWorker(QThread):
             pass
 
     def _execute_modify_from_message(self, message: str):
-        """从消息中执行修改"""
         self._handle_chat(message)
 
-    # ========== 用户响应 ==========
-
     def on_user_response(self, response: str, data: dict = None):
-        """处理用户响应（按钮点击等）"""
         self.add_log(f"用户响应: {response}", "user")
         self._flush_logs()
 
@@ -546,8 +498,6 @@ class AgentWorker(QThread):
 
     def on_modify_feedback(self, feedback: str):
         self.modify_plan(feedback)
-
-    # ========== 影响分析（保持原有） ==========
 
     def analyze_impact_and_update(self, file_path: str, old_content: str, new_content: str):
         self.add_log(f"🔍 分析 {file_path} 的影响范围...", "info")
