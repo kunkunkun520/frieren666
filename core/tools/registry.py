@@ -1,35 +1,25 @@
 """
 工具注册表 - 管理所有工具
+支持多个实例（每个 Agent 一个）
 """
 
 from typing import Dict, List, Optional, Any
 from core.tools.base import BaseTool, ToolResult
 
 
-# core/tools/registry.py
-
 class ToolRegistry:
-    """工具注册表（单例模式）"""
+    """工具注册表 - 支持多个实例（每个 Agent 一个）"""
 
-    _instance: Optional["ToolRegistry"] = None
-
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._tools = {}
-        return cls._instance
-
-    def __init__(self):
-        if not hasattr(self, '_initialized'):
-            self._tools: Dict[str, BaseTool] = {}
-            self._initialized = True
+    def __init__(self, name: str = "default"):
+        self.name = name
+        self._tools: Dict[str, BaseTool] = {}
 
     def register(self, tool: BaseTool) -> None:
         """注册工具"""
         if tool.name in self._tools:
-            print(f"警告: 工具 '{tool.name}' 已存在，将被覆盖")
+            print(f"警告: 工具 '{tool.name}' 已存在于 {self.name}，将被覆盖")
         self._tools[tool.name] = tool
-        print(f"✅ 工具已注册: {tool.name}")
+        print(f"✅ [{self.name}] 工具已注册: {tool.name}")
 
     def register_many(self, tools: List[BaseTool]) -> None:
         """批量注册工具"""
@@ -40,13 +30,15 @@ class ToolRegistry:
         """注销工具"""
         if name in self._tools:
             del self._tools[name]
+            print(f"🗑️ [{self.name}] 工具已注销: {name}")
             return True
         return False
 
     def clear(self) -> None:
         """清空所有工具"""
+        count = len(self._tools)
         self._tools.clear()
-        print("🗑️ 所有工具已清空")
+        print(f"🗑️ [{self.name}] 已清空 {count} 个工具")
 
     def get(self, name: str) -> Optional[BaseTool]:
         """获取工具"""
@@ -74,8 +66,9 @@ class ToolRegistry:
             required = tool.parameters.get("required", [])
             for param_name, param_info in params.items():
                 is_required = "必填" if param_name in required else "可选"
-                lines.append(
-                    f"  - `{param_name}` ({param_info.get('type', 'string')}, {is_required}): {param_info.get('description', '')}")
+                param_desc = param_info.get('description', '')
+                param_type = param_info.get('type', 'string')
+                lines.append(f"  - `{param_name}` ({param_type}, {is_required}): {param_desc}")
 
         return "\n".join(lines)
 
@@ -100,8 +93,16 @@ class ToolRegistry:
         except Exception as e:
             return ToolResult.fail(f"工具执行异常: {str(e)}")
 
+    @property
+    def count(self) -> int:
+        """工具数量"""
+        return len(self._tools)
 
-# 全局注册表实例
-tool_registry = ToolRegistry()
-# 全局注册表实例
-tool_registry = ToolRegistry()
+
+# 全局默认注册表（向后兼容旧代码）
+tool_registry = ToolRegistry("default")
+
+# 分 Agent 的注册表
+chat_tool_registry = ToolRegistry("chat")
+coder_tool_registry = ToolRegistry("coder")
+planner_tool_registry = ToolRegistry("planner")

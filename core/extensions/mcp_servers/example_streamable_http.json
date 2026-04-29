@@ -1,0 +1,11 @@
+{
+    "name": "my-mcp-server",
+    "description": "示例 MCP 服务器",
+    "type": "streamable_http",
+    "config": {
+        "url": "http://localhost:8000/mcp",
+        "headers": {
+            "Authorization": "Bearer your-token-here"
+        }
+    }
+}

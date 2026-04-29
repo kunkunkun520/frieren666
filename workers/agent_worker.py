@@ -1,5 +1,6 @@
 """
 Agent 后台工作线程 - 状态机版本 (完整版)
+每个 Agent 有独立的 ToolRegistry
 """
 
 import time
@@ -15,7 +16,7 @@ from core.coder import Coder
 from core.judge import Judge
 from core.context_manager import ContextManager, Step, StepStatus
 from core.agent_state import AgentState, AgentContext, StateMachine
-from core.tools import tool_registry, ToolResult
+from core.tools import ToolRegistry, ToolResult
 from core.tools.builtin import (
     CreateFileTool, ModifyFileTool, ReadFileTool, ListFilesTool,
     GetStatusTool, ResumeTaskTool, PauseTaskTool,
@@ -56,9 +57,10 @@ class AgentWorker(QThread):
         self._log_timer = None
         self._log_level = "info"
         self._response_timeout_timer = None
-
+        self._init_skills()
         self.workspace_path.mkdir(parents=True, exist_ok=True)
 
+        # 加载配置
         self.config = Config()
         planner_config = self.config.get_planner_config()
         coder_config = self.config.get_coder_config()
@@ -84,7 +86,85 @@ class AgentWorker(QThread):
         self.planner = Planner(planner_config, self.context)
         self.coder = Coder(coder_config, self.workspace_path)
         self.judge = Judge(judge_config)
-        self._register_builtin_tools()
+
+        # 每个 Agent 独立的 ToolRegistry
+        self.chat_tools = ToolRegistry("chat")
+        self.coder_tools = ToolRegistry("coder")
+        self.planner_tools = ToolRegistry("planner")
+        self.judge_tools = ToolRegistry("judge")
+
+        self._register_chat_tools()
+        self._register_coder_tools()
+        self._register_planner_tools()
+        self._load_mcp_tools()
+
+    def _register_chat_tools(self):
+        """注册对话工具"""
+        self.chat_tools.register_many([
+            SearchMemoryTool(),
+            GetStatusTool(),
+            ResumeTaskTool(),
+            PauseTaskTool(),
+            UpdateAgentsTool(),
+            AddDependencyTool(),
+        ])
+
+    def _register_coder_tools(self):
+        """注册代码工具"""
+        self.coder_tools.register_many([
+            CreateFileTool(),
+            ModifyFileTool(),
+            ReadFileTool(),
+            ListFilesTool(),
+        ])
+
+    def _register_planner_tools(self):
+        """注册规划工具"""
+        self.planner_tools.register_many([
+            ListFilesTool(),
+            ReadFileTool(),
+        ])
+
+    def _load_mcp_tools(self):
+        """加载各 Agent 的 MCP 工具"""
+        try:
+            from core.mcp.connectors.streamable_http import StreamableHttpConnector
+            from core.mcp.connectors.mcp_tool import MCPToolAdapter
+
+            agent_registries = {
+                "chat": self.chat_tools,
+                "coder": self.coder_tools,
+                "planner": self.planner_tools,
+                "judge": self.judge_tools,
+            }
+
+            for agent_name, registry in agent_registries.items():
+                mcp_config = self.config.get(f"mcp_{agent_name}", {})
+                if isinstance(mcp_config, str):
+                    try:
+                        mcp_config = json.loads(mcp_config)
+                    except:
+                        continue
+
+                servers = mcp_config.get("mcpServers", {})
+                for server_name, server_config in servers.items():
+                    server_type = server_config.get("type", "streamable_http")
+                    url = server_config.get("url", "")
+
+                    if server_type == "streamable_http" and url:
+                        try:
+                            connector = StreamableHttpConnector()
+                            if connector.connect({"url": url, "headers": {}}):
+                                for tool_config in connector.list_tools():
+                                    tool_name = tool_config.get("name", "")
+                                    prefixed_name = f"mcp_{server_name}__{tool_name}"
+                                    adapter = MCPToolAdapter(tool_name, tool_config, connector)
+                                    registry.register(adapter)
+                                print(f"🔌 [{agent_name}] 已加载 MCP 服务: {server_name}")
+                        except Exception as e:
+                            print(f"❌ [{agent_name}] MCP 服务加载失败: {server_name} - {e}")
+        except Exception as e:
+            print(f"MCP 加载失败: {e}")
 
     def _on_state_changed(self, old_state: AgentState, new_state: AgentState, reason: str):
         self.state_signal.emit(new_state.value)
@@ -198,42 +278,88 @@ class AgentWorker(QThread):
             return "modify"
         return "chat"
 
-    def _handle_chat(self, message: str):
-        intent = self._classify_intent_with_llm(message)
+    def _handle_chat(self, message: str, max_rounds: int = 5):
+        """支持多轮工具调用的聊天处理"""
+        original_message = message
+        tool_results = []
+        all_tool_names = []
 
-        if intent.get("tool") == "chat":
-            response = intent.get("params", {}).get("response", "好的")
-            self.add_log(f"🤖 Agent: {response}", "ai")
+        for round_num in range(max_rounds):
+            intent = self._classify_intent_with_llm(message)
+
+            if intent.get("tool") == "chat":
+                response = intent.get("params", {}).get("response", "")
+                if response:
+                    self.add_log(f"🤖 Agent: {response}", "ai")
+                self._flush_logs()
+                return
+
+            tool_name = intent.get("tool")
+            tool_params = intent.get("params", {})
+
+            if not tool_name:
+                if round_num == 0:
+                    self.add_log("🤖 抱歉，我不太明白。", "ai")
+                self._flush_logs()
+                return
+
+            all_tool_names.append(tool_name)
+            if len(all_tool_names) >= 3 and len(set(all_tool_names[-3:])) == 1:
+                self.add_log("⚠️ 检测到重复工具调用，自动停止", "warning")
+                break
+
+            self.sm.transition_to(AgentState.TOOL_EXECUTING, f"[{round_num + 1}] 调用工具: {tool_name}")
+            self.add_log(f"🔧 [{round_num + 1}/{max_rounds}] 调用工具: {tool_name}", "info")
             self._flush_logs()
-            return
+            QApplication.processEvents()
 
-        tool_name = intent.get("tool")
-        tool_params = intent.get("params", {})
+            result = self._execute_tool(tool_name, tool_params)
+            tool_results.append({"tool": tool_name, "result": result})
 
-        if not tool_name:
-            self.add_log("🤖 抱歉，我不太明白。", "ai")
-            return
+            results_summary = self._format_tool_results(tool_results)
+            message = f"""原始请求: {original_message}
+已执行的操作:
+{results_summary}
 
-        self.sm.transition_to(AgentState.TOOL_EXECUTING, f"调用工具: {tool_name}")
-        self.add_log(f"🔧 调用工具: {tool_name}", "info")
-        result = self._execute_tool(tool_name, tool_params)
+请判断任务是否完成。
+- 如果还需要调用其他工具，输出工具调用 JSON
+- 如果任务已完成，输出 {{"tool": "chat", "params": {{"response": "你的最终回复"}}}}
+- 注意：不要再重复调用已经成功执行过的工具"""
 
-        if result.success:
-            response = self._generate_response_after_tool(message, tool_name, result)
-        else:
-            response = f"执行 {tool_name} 失败: {result.error}"
+            self.sm.transition_to(AgentState.IDLE, f"工具 {tool_name} 执行完成")
 
+        self.add_log(f"⚠️ 达到最大轮数 ({max_rounds})，生成最终回复", "warning")
+        response = self._generate_final_response(original_message, tool_results)
         self.add_log(f"🤖 Agent: {response}", "ai")
         self._flush_logs()
-        self.sm.transition_to(AgentState.IDLE, "工具执行完成")
 
-    def _register_builtin_tools(self):
-        tool_registry.clear()
-        tool_registry.register_many([
-            CreateFileTool(), ModifyFileTool(), ReadFileTool(), ListFilesTool(),
-            GetStatusTool(), ResumeTaskTool(), PauseTaskTool(),
-            UpdateAgentsTool(), AddDependencyTool(), SearchMemoryTool(),
-        ])
+    def _format_tool_results(self, tool_results: list) -> str:
+        lines = []
+        for i, item in enumerate(tool_results):
+            tool_name = item["tool"]
+            result = item["result"]
+            if result.success:
+                result_str = str(result.result)[:500]
+                lines.append(f"{i + 1}. {tool_name} ✅: {result_str}")
+            else:
+                lines.append(f"{i + 1}. {tool_name} ❌: {result.error}")
+        return "\n".join(lines)
+
+    def _generate_final_response(self, original_message: str, tool_results: list) -> str:
+        results_summary = self._format_tool_results(tool_results)
+        prompt = f"""用户请求: {original_message}
+执行结果:
+{results_summary}
+
+请根据执行结果，用友好的语气回复用户。简洁明了。"""
+        try:
+            return self._call_llm_with_retry([
+                {"role": "system", "content": "你是友好的助手，总结执行结果。"},
+                {"role": "user", "content": prompt}
+            ])
+        except:
+            success_count = sum(1 for r in tool_results if r["result"].success)
+            return f"✅ 完成 {success_count}/{len(tool_results)} 个操作"
 
     def _call_llm_with_retry(self, messages: list, max_retries: int = 3, timeout: int = 120) -> str:
         last_error = None
@@ -287,7 +413,11 @@ class AgentWorker(QThread):
         return '\n'.join(lines) if lines else "暂无项目约定"
 
     def _classify_intent_with_llm(self, message: str) -> dict:
-        tools_prompt = tool_registry.get_tools_prompt()
+        # 对话使用 chat_tools
+        tools_prompt = self.chat_tools.get_tools_prompt()
+        if self.skill_manager:
+            skills_prompt = self.skill_manager.get_skills_prompt()
+            tools_prompt += f"\n\n{skills_prompt}"
         project_structure = self.context.get_project_structure(self.workspace_path)
         agents_md = self.context.read_agents_md()
         constraints = self._extract_key_constraints(agents_md)
@@ -312,7 +442,6 @@ class AgentWorker(QThread):
 
 ## 重要提醒
 - 严格遵守项目约定中的技术栈和依赖清单
-- 如果约定要求 FastAPI，不要生成 Flask 代码
 - 调用工具时使用项目结构中存在的精确路径
 
 输出 JSON：{{"tool": "工具名", "params": {{...}}}} 或 {{"tool": "chat", "params": {{"response": "回复"}}}}"""
@@ -333,11 +462,26 @@ class AgentWorker(QThread):
             "worker": self, "coder": self.coder,
             "context_manager": self.context, "workspace_path": self.workspace_path,
             "steps": self.steps,
+            "skill_manager": self.skill_manager,
         }
-        try:
-            return tool_registry.execute(tool_name, params, context)
-        except Exception as e:
-            return ToolResult.fail(f"工具执行异常: {e}")
+        # 先在 chat_tools 中查找，找不到再去 coder_tools
+        for registry in [self.chat_tools, self.coder_tools, self.planner_tools]:
+            tool = registry.get(tool_name)
+            if tool:
+                try:
+                    result = tool.execute(params, context)
+                    if isinstance(result, dict):
+                        return ToolResult(
+                            success=result.get("success", False),
+                            result=result.get("result"),
+                            error=result.get("error")
+                        )
+                    elif isinstance(result, ToolResult):
+                        return result
+                    return ToolResult.ok(result)
+                except Exception as e:
+                    return ToolResult.fail(f"工具执行异常: {e}")
+        return ToolResult.fail(f"工具不存在: {tool_name}")
 
     def _generate_response_after_tool(self, user_message: str, tool_name: str, result: ToolResult) -> str:
         prompt = f"""用户: {user_message}
@@ -499,6 +643,13 @@ class AgentWorker(QThread):
     def on_modify_feedback(self, feedback: str):
         self.modify_plan(feedback)
 
+    def _generate_diff(self, old_content: str, new_content: str) -> str:
+        import difflib
+        old_lines = old_content.splitlines()
+        new_lines = new_content.splitlines()
+        diff = difflib.unified_diff(old_lines, new_lines, fromfile='修改前', tofile='修改后', lineterm='')
+        return '\n'.join(diff)
+
     def analyze_impact_and_update(self, file_path: str, old_content: str, new_content: str):
         self.add_log(f"🔍 分析 {file_path} 的影响范围...", "info")
         self._flush_logs()
@@ -506,51 +657,56 @@ class AgentWorker(QThread):
 
         module_name = Path(file_path).stem
         related_files = self._find_files_importing_module(module_name)
+
         related_contents = []
-        for rel_path in related_files[:10]:
+        for rel_path in related_files[:5]:
             full_path = self.workspace_path / rel_path
             if full_path.exists():
                 try:
                     content = full_path.read_text(encoding="utf-8")
-                    related_contents.append(f"\n### {rel_path}\n```\n{content[:1500]}\n```")
+                    file_ext = full_path.suffix.lstrip('.')
+                    related_contents.append(f"\n### 文件: {rel_path}\n```{file_ext}\n{content}\n```")
                 except:
                     pass
 
         structure = self.context.get_project_structure(self.workspace_path)
+        diff = self._generate_diff(old_content, new_content)
 
         impact_prompt = f"""## 用户修改的文件: {file_path}
-### 修改前
-{old_content[:2000]}{"..." if len(old_content) > 2000 else ""}
-### 修改后
-{new_content[:2000]}{"..." if len(new_content) > 2000 else ""}
+## 代码差异（完整）
+{diff}
 ## 项目结构
 {structure}
 ## 导入了该模块的文件
 {chr(10).join([f"- {f}" for f in related_files]) if related_files else "无"}
-## 相关文件内容
+## 相关文件内容（完整）
 {chr(10).join(related_contents) if related_contents else "无"}
 ## 任务
-分析修改影响。输出 JSON: {{"affected_files": [{{"path": "路径", "reason": "原因", "suggested_change": "建议"}}], "summary": "摘要"}}
+根据差异分析修改影响。如果字段名、类型、约束变了，Schema和API必须同步更新。
+输出 JSON: {{"affected_files": [{{"path": "路径", "reason": "原因", "suggested_change": "具体修改代码"}}], "summary": "摘要"}}
 如果没有影响，返回空数组。"""
 
         try:
             response = self._call_llm_with_retry([
-                {"role": "system", "content": "你是代码分析专家。"},
+                {"role": "system", "content": "你是代码分析专家，分析代码变更的影响范围。"},
                 {"role": "user", "content": impact_prompt}
             ], timeout=180)
+
             json_match = re.search(r'\{.*\}', response, re.DOTALL)
             if not json_match:
-                self.add_log("❌ 无法解析 JSON", "error")
+                self.add_log("❌ 无法解析影响分析 JSON", "error")
                 return
+
             impact_data = json.loads(json_match.group())
             affected_files = impact_data.get("affected_files", [])
             summary = impact_data.get("summary", "")
 
             if not affected_files:
-                self.add_log(f"✅ {summary or '没有影响'}", "success")
+                self.add_log(f"✅ {summary or '没有发现需要修改的其他文件'}", "success")
+                self._flush_logs()
                 return
 
-            self.add_log(f"📋 发现 {len(affected_files)} 个文件受影响", "info")
+            self.add_log(f"📋 发现 {len(affected_files)} 个文件可能受影响:", "info")
             for f in affected_files:
                 self.add_log(f"  - {f['path']}: {f['reason']}", "info")
             self._flush_logs()
@@ -559,10 +715,13 @@ class AgentWorker(QThread):
             self.ask_signal.emit(
                 f"发现 {len(affected_files)} 个文件可能受影响，是否自动修改？\n\n{summary}",
                 ["确认修改", "跳过"],
-                {"action": "confirm_impact_update"}
+                {"action": "confirm_impact_update", "affected_files": affected_files}
             )
+            self.ctx.pending_action = "confirm_impact_update"
+
         except Exception as e:
             self.add_log(f"❌ 影响分析失败: {e}", "error")
+            self._flush_logs()
 
     def _find_files_importing_module(self, module_name: str) -> List[str]:
         importing_files = []
@@ -624,3 +783,24 @@ class AgentWorker(QThread):
             self._flush_logs()
         self.add_log("✅ 影响更新完成", "success")
         self.finished_signal.emit({"success": True, "refresh": True})
+
+    def _init_skills(self):
+        """初始化 Skill 系统"""
+        try:
+            from core.skill.skill_manager import SkillManager
+
+            skills_dir = Path("extensions/skills")
+            self.skill_manager = SkillManager(skills_dir)
+            count = self.skill_manager.load_all()
+
+            if count > 0:
+                self.add_log(f"🧩 已加载 {count} 个 Skill", "info")
+
+            # 注册 Skill 工具
+            from core.tools.builtin.skill_tools import ListSkillsTool, ReadSkillTool
+            self.chat_tools.register(ListSkillsTool())
+            self.chat_tools.register(ReadSkillTool())
+
+        except Exception as e:
+            print(f"Skill 初始化失败: {e}")
+            self.skill_manager = None

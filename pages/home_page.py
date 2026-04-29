@@ -651,8 +651,33 @@ class HomePage(QWidget):
 
             widget = ProjectItemWidget(session_data)
             widget.clicked.connect(self.on_project_clicked)
+            widget.deleted.connect(self.on_project_delete)
             self.project_list.setItemWidget(item, widget)
 
+    def on_project_delete(self, session_id: str):
+        """删除项目"""
+        if not session_id:
+            return
+
+        session = self.session_manager.load_session(session_id)
+        project_name = session.name if session else "未知项目"
+
+        reply = QMessageBox.question(
+            self, "确认删除",
+            f"确定要删除项目「{project_name}」吗？\n\n"
+            f"这将永久删除该项目的工作区和所有文件。\n"
+            f"此操作不可撤销！",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+
+        if reply == QMessageBox.Yes:
+            try:
+                self.session_manager.delete_session(session_id)
+                self.load_recent_projects()
+                print(f"项目已删除: {project_name} ({session_id})")
+            except Exception as e:
+                QMessageBox.critical(self, "删除失败", f"删除项目失败: {e}")
     def on_new_task(self):
         task = self.task_input.toPlainText().strip()
         if not task:
@@ -685,6 +710,7 @@ class ProjectItemWidget(QWidget):
     """项目列表项"""
 
     clicked = Signal(dict)
+    deleted = Signal(str)  # 新增：删除信号，传递 session_id
 
     def __init__(self, session_data, parent=None):
         super().__init__(parent)
@@ -740,8 +766,32 @@ class ProjectItemWidget(QWidget):
         open_btn.clicked.connect(self.on_click)
         layout.addWidget(open_btn)
 
+        # 新增：删除按钮
+        delete_btn = QPushButton("🗑️")
+        delete_btn.setFixedWidth(40)
+        delete_btn.setToolTip("删除此项目")
+        delete_btn.setStyleSheet("""
+            QPushButton {
+                background: transparent;
+                border: 1px solid #555;
+                border-radius: 4px;
+                padding: 6px 8px;
+                color: #888;
+            }
+            QPushButton:hover {
+                background: #f14c4c;
+                border-color: #f14c4c;
+                color: white;
+            }
+        """)
+        delete_btn.clicked.connect(self.on_delete)
+        layout.addWidget(delete_btn)
+
     def on_click(self):
         self.clicked.emit(self.session_data)
+
+    def on_delete(self):
+        self.deleted.emit(self.session_data.get("session_id", ""))
 
     def mouseDoubleClickEvent(self, event):
         self.clicked.emit(self.session_data)
