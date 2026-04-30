@@ -32,3 +32,29 @@ Archon 是一个基于 PySide6 构建的桌面端 AI 编程助手，核心理念
 | **MODIFYING** | `modifying` | 执行任务期间，用户要求修改文件 | 等待修改完成 |
 | **PAUSED** | `paused` | 用户手动暂停 | 恢复执行、取消 |
 | **CANCELLED** | `cancelled` | 用户取消任务 | 新建任务、修改文件、聊天 |
+
+## 转换规则表
+
+| 当前状态 | 触发事件 | 新状态 | 说明 |
+|----------|----------|--------|------|
+| IDLE | 用户输入新任务 | PLANNING | 开始规划流程 |
+| IDLE | 用户输入修改指令 | TOOL_EXECUTING | 直接执行修改工具 |
+| IDLE | 用户聊天/询问 | IDLE | 纯聊天，不改变状态 |
+| IDLE | 用户说"继续"/"恢复" | EXECUTING | 恢复未完成的任务 |
+| PLANNING | 计划生成成功 | WAITING_CONFIRM | 等待用户确认 |
+| PLANNING | 计划生成失败 | IDLE | 回到空闲 |
+| WAITING_CONFIRM | 用户点击"确认执行" | EXECUTING | 开始执行步骤 |
+| WAITING_CONFIRM | 用户点击"修改计划" | PLANNING | 重新规划 |
+| WAITING_CONFIRM | 用户点击"取消" | IDLE | 回到空闲 |
+| EXECUTING | 当前 Step 执行成功，还有剩余 | EXECUTING | 继续下一个 Step |
+| EXECUTING | 所有 Step 执行完成 | IDLE | 任务完成 |
+| EXECUTING | Step 执行失败 | WAITING_CONFIRM | 询问用户是否继续 |
+| EXECUTING | 用户要求修改文件 | MODIFYING | 暂停执行，先修改 |
+| EXECUTING | 用户暂停 | PAUSED | 暂停执行 |
+| EXECUTING | 用户聊天/提问 | EXECUTING | 不改变状态，异步回答 |
+| TOOL_EXECUTING | 工具执行成功 | IDLE | 回到空闲 |
+| TOOL_EXECUTING | 工具执行失败 | IDLE | 回到空闲，显示错误 |
+| MODIFYING | 修改完成 | EXECUTING | 恢复执行 |
+| PAUSED | 用户恢复 | EXECUTING | 继续执行 |
+| PAUSED | 用户取消 | CANCELLED | 取消任务 |
+| CANCELLED | — | IDLE | 自动重置 |
