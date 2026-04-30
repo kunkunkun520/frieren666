@@ -123,3 +123,27 @@ IDLE
 3. **可恢复性**：任务中断后，状态和进度自动保存，下次加载可恢复
 4. **非阻塞**：执行任务期间，用户可以异步提问（不改变状态）
 5. **防死循环**：状态转换有明确的规则检查，非法转换会被拒绝
+
+## 🚀 快速开始
+
+### 环境要求
+
+- Python 3.10+
+- Ollama（本地模型）或 OpenAI/Anthropic API 密钥
+
+### 安装
+
+```bash
+# 克隆项目
+git clone https://github.com/yourusername/archon.git
+cd archon
+
+# 安装依赖
+pip install -r requirements.txt
+
+# 安装 ChromaDB（RAG 记忆系统需要）
+pip install chromadb
+
+# 启动应用
+
+python main.py
