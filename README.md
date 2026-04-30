@@ -58,3 +58,68 @@ Archon 是一个基于 PySide6 构建的桌面端 AI 编程助手，核心理念
 | PAUSED | 用户恢复 | EXECUTING | 继续执行 |
 | PAUSED | 用户取消 | CANCELLED | 取消任务 |
 | CANCELLED | — | IDLE | 自动重置 |
+
+## 状态携带的上下文
+
+每个状态转换时，Agent 会携带以下上下文数据：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `state` | AgentState | 当前状态 |
+| `user_task` | str | 用户的原始任务描述 |
+| `steps` | List[Step] | 执行计划中的所有步骤 |
+| `current_step_index` | int | 当前正在执行的步骤索引 |
+| `step_status_map` | dict | 每个步骤的执行状态 |
+| `pending_action` | str | 等待用户确认的操作类型 |
+| `pending_question` | str | 等待用户回答的问题 |
+
+
+## 典型流程示例
+
+### 流程 1：新建项目并执行
+IDLE
+→ 用户输入"做一个 FastAPI 用户管理系统"
+→ PLANNING
+→ 生成 15 个步骤
+→ WAITING_CONFIRM（显示计划，等待确认）
+→ 用户点击"确认执行"
+→ EXECUTING
+→ Step 1 完成 → Step 2 完成 → ... → Step 15 完成
+→ IDLE
+
+### 流程 2：执行中穿插修改
+EXECUTING（正在执行 Step 5）
+→ 用户说"给 User 模型加个 phone 字段"
+→ MODIFYING
+→ 读取 user.py → 生成修改 → 显示 diff → 用户确认
+→ EXECUTING（继续执行 Step 5）
+
+### 流程 3：加载已有项目
+IDLE
+→ 加载已有会话
+→ 显示已完成的步骤（✅）和待执行的步骤（⏳）
+→ 用户说"恢复执行"
+→ EXECUTING（从第一个未完成的 Step 继续）
+
+### 流程 4：空闲时聊天
+IDLE
+→ 用户说"项目进度怎么样了？"
+→ IDLE（调用 get_status 工具，回复结果）
+→ 用户说"user.py 里有什么？"
+→ IDLE（调用 read_file 工具，回复内容）
+
+## 与工具系统的关系
+
+状态机控制**何时**可以执行操作，工具系统定义**可以执行什么**操作：
+
+- **IDLE** 状态下：允许调用所有 Chat 工具（聊天、检索、修改）
+- **EXECUTING** 状态下：允许调用 Chat 工具（不打断执行），但不允许调用 Coder 工具
+- **MODIFYING** 状态下：允许调用 Coder 工具（修改文件）
+- **PLANNING** 状态下：阻塞所有工具调用
+- ## 设计原则
+
+1. **单一路径**：所有用户输入通过 `handle_user_input` 统一入口处理
+2. **状态隔离**：每个状态只处理属于它的用户输入类型
+3. **可恢复性**：任务中断后，状态和进度自动保存，下次加载可恢复
+4. **非阻塞**：执行任务期间，用户可以异步提问（不改变状态）
+5. **防死循环**：状态转换有明确的规则检查，非法转换会被拒绝
