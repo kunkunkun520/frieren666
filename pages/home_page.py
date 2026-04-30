@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QDialog, QLineEdit, QFormLayout,
     QMessageBox, QFileDialog, QGroupBox, QTextBrowser, QListWidget, QListWidgetItem
 )
-from PySide6.QtCore import Qt, Signal,QSize
+from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtGui import QFont, QTextCursor
 
 from utils.session_manager import SessionManager
@@ -81,13 +81,11 @@ class ProjectSetupDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setSpacing(15)
 
-        # 标题
         title = QLabel("🚀 项目初始化")
         title.setFont(QFont("Segoe UI", 18, QFont.Bold))
         title.setStyleSheet("color: #ffffff;")
         layout.addWidget(title)
 
-        # 任务显示
         task_label = QLabel("📋 你的任务:")
         task_label.setStyleSheet("color: #888; margin-top: 10px;")
         layout.addWidget(task_label)
@@ -98,7 +96,6 @@ class ProjectSetupDialog(QDialog):
         task_display.setMaximumHeight(80)
         layout.addWidget(task_display)
 
-        # 对话历史
         chat_label = QLabel("💬 对话")
         chat_label.setStyleSheet("color: #888; margin-top: 10px;")
         layout.addWidget(chat_label)
@@ -115,7 +112,6 @@ class ProjectSetupDialog(QDialog):
         """)
         layout.addWidget(self.chat_browser, stretch=1)
 
-        # AGENTS.md 预览（可折叠）
         self.preview_group = QGroupBox("📄 AGENTS.md 预览")
         self.preview_group.setCheckable(True)
         self.preview_group.setChecked(False)
@@ -132,7 +128,6 @@ class ProjectSetupDialog(QDialog):
         preview_layout.addWidget(self.preview_browser)
         layout.addWidget(self.preview_group)
 
-        # 输入区域
         input_layout = QHBoxLayout()
         input_layout.setSpacing(10)
 
@@ -153,12 +148,10 @@ class ProjectSetupDialog(QDialog):
         input_layout.addWidget(self.skip_btn)
         layout.addLayout(input_layout)
 
-        # 提示
         hint = QLabel("💡 提示: 你可以回答问题，也可以点击「跳过」让 AI 自行决定")
         hint.setStyleSheet("color: #888; font-size: 11px;")
         layout.addWidget(hint)
 
-        # 最终确认按钮
         self.confirm_btn = QPushButton("✅ 确认并创建项目")
         self.confirm_btn.setStyleSheet("""
             QPushButton {
@@ -180,10 +173,8 @@ class ProjectSetupDialog(QDialog):
         layout.addWidget(self.confirm_btn)
 
     def start_conversation(self):
-        """开始对话，AI 提出第一个问题"""
         self.add_message("🤖 AI", "正在分析你的任务...", "ai")
 
-        # 让 AI 分析任务并提出问题
         analysis_prompt = f"""
 用户任务：{self.user_task}
 
@@ -210,7 +201,6 @@ class ProjectSetupDialog(QDialog):
         self.conversation_history.append({"role": "assistant", "content": question})
 
     def send_message(self):
-        """用户发送回答"""
         message = self.message_input.text().strip()
         if not message:
             return
@@ -222,20 +212,16 @@ class ProjectSetupDialog(QDialog):
         self.continue_conversation()
 
     def skip_question(self):
-        """用户跳过，让 AI 自己决定"""
         self.add_message("👤 用户", "（让 AI 自行决定）", "user")
         self.conversation_history.append({"role": "user", "content": "你可以自行决定，不用再问我。请根据任务直接生成最合适的约定。"})
         self.continue_conversation(finalize=True)
 
     def continue_conversation(self, finalize=False):
-        """继续对话"""
         self.add_message("🤖 AI", "正在思考...", "ai")
 
         if finalize or len(self.conversation_history) >= 6:
-            # 已经问了足够多，直接生成
             action = "generate"
         else:
-            # 判断是否需要继续问
             check_prompt = f"""
 用户任务：{self.user_task}
 
@@ -275,7 +261,6 @@ class ProjectSetupDialog(QDialog):
                 action = "generate"
 
         if action == "ask":
-            # 继续提问
             try:
                 question = data["question"]
             except:
@@ -283,7 +268,6 @@ class ProjectSetupDialog(QDialog):
             self.add_message("🤖 AI", question, "ai")
             self.conversation_history.append({"role": "assistant", "content": question})
         else:
-            # 生成 AGENTS.md
             generate_prompt = f"""
 用户任务：{self.user_task}
 
@@ -350,7 +334,6 @@ class ProjectSetupDialog(QDialog):
         colors = {"ai": "#4ec9b0", "user": "#ce9178", "system": "#888"}
         color = colors.get(level, "#ccc")
 
-        # 移除之前的"正在思考..."
         if "正在思考" in self.chat_browser.toPlainText():
             cursor = self.chat_browser.textCursor()
             cursor.movePosition(QTextCursor.End)
@@ -366,8 +349,6 @@ class ProjectSetupDialog(QDialog):
         return self.agents_md
 
     def get_session_name(self):
-        """从对话中提取项目名称，或生成默认名称"""
-        # 尝试让 AI 提取项目名称
         if self.agents_md:
             prompt = f"""
 从以下 AGENTS.md 中提取项目名称，如果找不到，根据任务生成一个简短的名称（2-4个字）。
@@ -388,7 +369,6 @@ class ProjectSetupDialog(QDialog):
             except:
                 pass
 
-        # 默认名称
         return f"项目_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
 
@@ -452,7 +432,7 @@ class ProjectCard(QFrame):
 class HomePage(QWidget):
     """首页 - 欢迎页 / 项目启动器"""
 
-    new_session_signal = Signal(str, str, str)  # session_name, user_task, agents_md
+    new_session_signal = Signal(str, str, str)
     load_session_signal = Signal(object)
     open_folder_signal = Signal(str)
 
@@ -460,7 +440,6 @@ class HomePage(QWidget):
         super().__init__()
         self.session_manager = session_manager
 
-        # 初始化 LLM 客户端
         config = Config()
         planner_config = config.get_planner_config()
         self.llm_client = LLMClient(planner_config)
@@ -478,12 +457,7 @@ class HomePage(QWidget):
         # 左侧面板
         left_panel = QFrame()
         left_panel.setFixedWidth(400)
-        left_panel.setStyleSheet("""
-            QFrame {
-                background: #252526;
-                border: none;
-            }
-        """)
+        left_panel.setStyleSheet("QFrame { background: #252526; border: none; }")
 
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(30, 40, 30, 40)
@@ -517,7 +491,13 @@ class HomePage(QWidget):
         quick_layout.addWidget(quick_title)
 
         self.task_input = QTextEdit()
-        self.task_input.setPlaceholderText("输入任务描述...\n\n例如：\n- 写一个 Pygame 2D 游戏\n- 创建一个数据分析脚本\n- 搭建一个 FastAPI 后端")
+        self.task_input.setPlaceholderText(
+            "输入任务描述...\n\n"
+            "例如：\n"
+            "- 写一个 Pygame 2D 游戏\n"
+            "- 创建一个数据分析脚本\n"
+            "- 搭建一个 FastAPI 后端"
+        )
         self.task_input.setMaximumHeight(120)
         self.task_input.setStyleSheet("""
             QTextEdit {
@@ -527,9 +507,7 @@ class HomePage(QWidget):
                 padding: 14px;
                 color: #cccccc;
             }
-            QTextEdit:focus {
-                background: #252525;
-            }
+            QTextEdit:focus { background: #252525; }
         """)
         quick_layout.addWidget(self.task_input)
 
@@ -576,12 +554,7 @@ class HomePage(QWidget):
 
         # 右侧面板
         right_panel = QFrame()
-        right_panel.setStyleSheet("""
-            QFrame {
-                background: #1e1e1e;
-                border: none;
-            }
-        """)
+        right_panel.setStyleSheet("QFrame { background: #1e1e1e; border: none; }")
 
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(40, 40, 60, 40)
@@ -608,9 +581,7 @@ class HomePage(QWidget):
                 margin: 4px 0;
                 padding: 0;
             }
-            QListWidget::item:hover {
-                background: #2d2d2d;
-            }
+            QListWidget::item:hover { background: #2d2d2d; }
         """)
         self.project_list.setSpacing(2)
         right_layout.addWidget(self.project_list)
@@ -655,7 +626,6 @@ class HomePage(QWidget):
             self.project_list.setItemWidget(item, widget)
 
     def on_project_delete(self, session_id: str):
-        """删除项目"""
         if not session_id:
             return
 
@@ -665,8 +635,7 @@ class HomePage(QWidget):
         reply = QMessageBox.question(
             self, "确认删除",
             f"确定要删除项目「{project_name}」吗？\n\n"
-            f"这将永久删除该项目的工作区和所有文件。\n"
-            f"此操作不可撤销！",
+            f"这将永久删除该项目的工作区和所有文件。\n此操作不可撤销！",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No
         )
@@ -678,6 +647,7 @@ class HomePage(QWidget):
                 print(f"项目已删除: {project_name} ({session_id})")
             except Exception as e:
                 QMessageBox.critical(self, "删除失败", f"删除项目失败: {e}")
+
     def on_new_task(self):
         task = self.task_input.toPlainText().strip()
         if not task:
@@ -705,12 +675,30 @@ class HomePage(QWidget):
         if session:
             self.load_session_signal.emit(session)
 
+    def on_browse_all(self):
+        """浏览所有项目"""
+        from pages.sessions_page import SessionsPage
+        dialog = QDialog(self)
+        dialog.setWindowTitle("所有项目")
+        dialog.setMinimumSize(700, 500)
+        dialog.setStyleSheet("QDialog { background: #252526; }")
+        layout = QVBoxLayout(dialog)
+        sessions_page = SessionsPage(self.session_manager)
+        sessions_page.new_session_signal.connect(
+            lambda name, task: self.new_session_signal.emit(name, task, "")
+        )
+        sessions_page.load_session_signal.connect(self.load_session_signal)
+        sessions_page.load_session_signal.connect(lambda: dialog.accept())
+        layout.addWidget(sessions_page)
+        dialog.exec()
+        self.load_recent_projects()
+
 
 class ProjectItemWidget(QWidget):
     """项目列表项"""
 
     clicked = Signal(dict)
-    deleted = Signal(str)  # 新增：删除信号，传递 session_id
+    deleted = Signal(str)
 
     def __init__(self, session_data, parent=None):
         super().__init__(parent)
@@ -766,7 +754,6 @@ class ProjectItemWidget(QWidget):
         open_btn.clicked.connect(self.on_click)
         layout.addWidget(open_btn)
 
-        # 新增：删除按钮
         delete_btn = QPushButton("🗑️")
         delete_btn.setFixedWidth(40)
         delete_btn.setToolTip("删除此项目")

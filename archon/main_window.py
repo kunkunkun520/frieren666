@@ -186,7 +186,8 @@ class MainWindow(QMainWindow):
         self.home_page.load_session_signal.connect(self.on_load_session)
         self.home_page.open_folder_signal.connect(self.on_open_folder)
 
-    def on_new_session(self, session_name, user_task, agents_md=""):
+    def on_new_session(self, session_name, user_task, agents_md=None):
+        """创建新会话"""
         print(f"创建新会话: {session_name}")
         session = self.session_manager.create_session(session_name, user_task)
         workspace_path = Path(session.workspace_path)
@@ -211,7 +212,6 @@ class MainWindow(QMainWindow):
 
         self._switch_page(self.console_page)
         self.status_label.setText(f"● 创建新会话: {session_name}")
-
     def on_load_session(self, session):
         print(f"加载会话: {session.name}")
         workspace_path = Path(session.workspace_path)
