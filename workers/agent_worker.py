@@ -184,7 +184,7 @@ class AgentWorker(QThread):
 
     def handle_user_input(self, message: str):
         self.add_log(f"👤 用户: {message}", "user")
-
+        self._flush_logs()
         if message == "结束":
             self.finished_signal.emit({"success": True, "completed": True})
             return
@@ -277,6 +277,7 @@ class AgentWorker(QThread):
                 response = intent.get("params", {}).get("response", "")
                 if response:
                     self.add_log(f"🤖 Agent: {response}", "ai")
+                    self._flush_logs()
                 return
             tool_name = intent.get("tool")
             if not tool_name:
@@ -326,15 +327,15 @@ class AgentWorker(QThread):
         constraints = self._extract_key_constraints(agents_md)
 
         prompt = f"""## ⚠️ 必须输出 JSON
-## 项目约定
-{constraints}
-## 可用工具
-{tools_prompt}
-## 项目结构
-{project_structure}
-## 用户消息
-{message}
-输出 JSON：{{"tool": "工具名", "params": {{...}}}} 或 {{"tool": "chat", "params": {{"response": "回复"}}}}"""
+    ## 项目约定
+    {constraints}
+    ## 可用工具
+    {tools_prompt}
+    ## 项目结构
+    {project_structure}
+    ## 用户消息
+    {message}
+    输出 JSON：{{"tool": "工具名", "params": {{...}}}} 或 {{"tool": "chat", "params": {{"response": "回复"}}}}"""
         try:
             response = self._call_llm_with_retry([
                 {"role": "system", "content": "只输出 JSON。"},
@@ -342,11 +343,15 @@ class AgentWorker(QThread):
             ])
             json_match = re.search(r'\{.*\}', response, re.DOTALL)
             if json_match:
-                return json.loads(json_match.group())
-        except:
-            pass
-        return {"tool": "chat", "params": {"response": "抱歉，我不太明白。"}}
 
+                parsed = json.loads(json_match.group())
+                return parsed
+            else:
+                print(f"=== JSON 匹配失败 ===")
+        except Exception as e:
+            print(f"=== classify_intent 异常: {e} ===")
+
+        return {"tool": "chat", "params": {"response": "抱歉，我不太明白。"}}
     def _extract_key_constraints(self, agents_md: str) -> str:
         if not agents_md:
             return "暂无项目约定"
