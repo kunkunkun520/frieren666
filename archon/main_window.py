@@ -13,6 +13,7 @@ from PySide6.QtCore import Qt
 from pages.home_page import HomePage
 from pages.console_page import ConsolePage
 from pages.settings_page import SettingsPage
+from pages.stats_page import StatsPage
 from utils.session_manager import SessionManager
 from workers.agent_worker import AgentWorker
 
@@ -40,6 +41,7 @@ class MainWindow(QMainWindow):
         self.home_page = HomePage(self.session_manager)
         self.console_page = ConsolePage()
         self.settings_page = SettingsPage()
+        self.stats_page = StatsPage()
 
         main_layout.addWidget(self._create_top_nav())
 
@@ -90,6 +92,7 @@ class MainWindow(QMainWindow):
             ("🏠 首页", self.home_page),
             ("🎮 控制台", self.console_page),
             ("⚙️ 设置", self.settings_page),
+            ("📊 统计", self.stats_page),
         ]
 
         for text, page in nav_items:
@@ -187,7 +190,6 @@ class MainWindow(QMainWindow):
         self.home_page.open_folder_signal.connect(self.on_open_folder)
 
     def on_new_session(self, session_name, user_task, agents_md=None):
-        """创建新会话"""
         print(f"创建新会话: {session_name}")
         session = self.session_manager.create_session(session_name, user_task)
         workspace_path = Path(session.workspace_path)
@@ -212,6 +214,7 @@ class MainWindow(QMainWindow):
 
         self._switch_page(self.console_page)
         self.status_label.setText(f"● 创建新会话: {session_name}")
+
     def on_load_session(self, session):
         print(f"加载会话: {session.name}")
         workspace_path = Path(session.workspace_path)
